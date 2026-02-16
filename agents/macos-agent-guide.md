@@ -261,3 +261,34 @@ No iOS device connected during testing. Task carried forward.
 - **Apple News uses QUIC for content**: Content traffic bypasses the TCP proxy entirely. This is fine — we only need to block the ad SDK domain, which routes through the proxy as a standard HTTPS CONNECT.
 - **Apple News uses encrypted DNS**: Zero port-53 queries. Pi-hole/DNS-based blocking cannot reach News. This validates the proxy approach.
 - **Do NOT install custom CA certificates** until explicitly instructed. Domain blocking works at the CONNECT level — we see the domain name and block before the TLS handshake.
+
+### MITM Case Study: Reddit Native Ads
+
+**Problem**: Reddit serves ads as "promoted" posts from its own domain (`www.reddit.com`). These are indistinguishable from regular content at the domain level. Domain-level blocking cannot filter them without blocking Reddit entirely.
+
+**Why Reddit is a good MITM test case**:
+- Ads and content share the same origin domain — the exact scenario domain blocking can't handle
+- Promoted posts have structural markers in the HTML/JSON (e.g., `promoted`, `is_promoted`, ad labels) that content inspection could target
+- Reddit is not an Apple app, so no certificate pinning concerns — standard MITM with a custom CA should work
+- Reddit's ad volume is high enough to validate detection but low enough (relative to content) to measure precision
+- Unlike Apple News (which uses QUIC and encrypted DNS), Reddit in Safari uses standard HTTPS through the proxy, making it the path of least resistance for MITM development
+
+**What MITM would need to do**:
+1. Terminate the TLS connection from the client using a custom CA certificate
+2. Inspect the HTTP response body from `www.reddit.com`
+3. Identify promoted/ad content in the response (JSON API responses or HTML)
+4. Strip or modify the ad content before forwarding to the client
+5. Re-encrypt and forward the modified response
+
+**Prerequisites before testing**:
+- Custom CA certificate generated on the proxy (Linux side)
+- CA certificate installed and trusted on macOS (System Keychain + full trust)
+- Proxy updated to support TLS interception for selected domains
+- Allowlist approach: only MITM domains that need content inspection (e.g., `www.reddit.com`), passthrough everything else
+
+**Testing approach**:
+1. Browse Reddit without MITM — capture baseline of promoted posts seen
+2. Enable MITM for `www.reddit.com` only — verify pages still load correctly
+3. Add content filtering rules targeting promoted posts
+4. Browse again — compare promoted post visibility
+5. Verify no breakage on non-MITM sites (CNN, Yahoo, Apple News should be unaffected)
