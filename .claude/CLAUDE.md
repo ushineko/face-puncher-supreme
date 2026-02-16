@@ -35,6 +35,22 @@ No rules relaxed from defaults. All categories kept at strict.
 - **Personal project**: This is a personal project. Never reference company names, internal tools, or business-specific information in code, commits, docs, or generated content.
 - **Cross-system testing**: This project uses a macOS agent guide (`agents/macos-agent-guide.md`) to coordinate testing between the Linux dev environment and a macOS/iOS test system. Behavioral claims about Apple apps must be verified via live testing, not assumed from web research.
 - **Probe endpoint**: The proxy reserves the `/fps/` URL path prefix for management endpoints. These are never forwarded upstream.
+- **Lint gate**: Always run `make lint` (golangci-lint) after editing Go code. Lint must pass before committing, alongside tests and code quality checks. This is part of every validation pass.
+
+---
+
+## Workflow: Quality Gates
+
+All gates must pass before committing code changes:
+
+1. **Tests**: `make test` (unit tests with `-race -short`)
+2. **Lint**: `make lint` (golangci-lint v2, auto-installs if missing)
+3. **Vet**: `go vet ./...`
+4. **Code quality pass**: Dead code, duplication, encapsulation (per global Phase 4)
+5. **Security review**: Per global Phase 5
+6. **Validation report**: Written to `validation-reports/`
+
+Do not skip lint. If lint fails after editing code, fix the issues before proceeding.
 
 ---
 

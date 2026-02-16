@@ -114,7 +114,7 @@ func TestIntegrationHTTPPlain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := client.Get(tt.url)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck // test cleanup
 
 			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 
@@ -145,7 +145,7 @@ func TestIntegrationHTTPRedirect(t *testing.T) {
 		client := _integrationFollowRedirectsClient(t, proxyURL)
 		resp, err := client.Get("http://httpbin.org/redirect/3")
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // test cleanup
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"should follow 3 redirects and land on 200")
@@ -155,11 +155,12 @@ func TestIntegrationHTTPRedirect(t *testing.T) {
 		client := _integrationFollowRedirectsClient(t, proxyURL)
 		resp, err := client.Get("http://github.com")
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // test cleanup
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"should follow HTTP->HTTPS redirect")
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
 		assert.Greater(t, len(body), 1000, "github.com should return substantial HTML")
 	})
 }
@@ -203,7 +204,7 @@ func TestIntegrationHTTPSConnect(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := client.Get(tt.url)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck // test cleanup
 
 			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 
@@ -248,7 +249,7 @@ func TestIntegrationNewsSites(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := client.Get(tt.url)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck // test cleanup
 
 			// News sites may return 200 or 30x. Either is acceptable
 			// as long as we get a response through the tunnel.
@@ -283,7 +284,7 @@ func TestIntegrationProbeCountersIncrement(t *testing.T) {
 	} {
 		resp, err := client.Get(site)
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// Verify counters increased.

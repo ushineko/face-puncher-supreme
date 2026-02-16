@@ -26,7 +26,7 @@ type Config struct {
 
 // Setup creates a logger that writes to stderr and optionally to a rotated
 // log file. Returns the logger and a cleanup function to close the file.
-func Setup(cfg Config) (*slog.Logger, func()) {
+func Setup(cfg Config) (logger *slog.Logger, cleanup func()) {
 	level := slog.LevelInfo
 	if cfg.Verbose {
 		level = slog.LevelDebug
@@ -41,7 +41,7 @@ func Setup(cfg Config) (*slog.Logger, func()) {
 	}
 
 	// Ensure log directory exists.
-	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.LogDir, 0o750); err != nil { //nolint:gosec // log directory
 		// Fall back to stderr-only if we can't create the directory.
 		slog.New(stderrHandler).Warn("failed to create log directory, file logging disabled",
 			"dir", cfg.LogDir,
@@ -66,8 +66,8 @@ func Setup(cfg Config) (*slog.Logger, func()) {
 		handlers: []slog.Handler{stderrHandler, fileHandler},
 	}
 
-	cleanup := func() {
-		lj.Close()
+	cleanup = func() {
+		_ = lj.Close()
 	}
 
 	return slog.New(multi), cleanup
@@ -87,7 +87,7 @@ func (m *multiHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return false
 }
 
-func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error { //nolint:gocritic // slog.Handler interface requires value receiver
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, r.Level) {
 			if err := h.Handle(ctx, r); err != nil {

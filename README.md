@@ -10,6 +10,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Probe Endpoint](#probe-endpoint)
 - [Logging](#logging)
 - [Test](#test)
+- [Lint](#lint)
 - [Project Structure](#project-structure)
 - [Changelog](#changelog)
 
@@ -79,6 +80,14 @@ go test -race -v ./...
 
 Integration tests are skipped with `-short` (which `make test` uses via `-race -v`). To run them, omit the `-short` flag or run directly with `go test -race -v ./internal/proxy/`.
 
+## Lint
+
+```bash
+make lint
+```
+
+Uses golangci-lint v2 with a versioned binary (auto-installed on first run). Configuration is in `.golangci.yml`. Enabled linters: errcheck, gocognit, gocritic, gocyclo, govet, lll, unparam, unused, cyclop, gosec.
+
 ## Project Structure
 
 ```
@@ -92,6 +101,13 @@ agents/             Cross-system testing guides
 ```
 
 ## Changelog
+
+### v0.2.0 — 2026-02-16
+
+- golangci-lint v2 integration with versioned binary and auto-install via `make lint`
+- Lint fixes: error handling, Slowloris protection (`ReadHeaderTimeout`), tighter directory permissions
+- Spec 002 draft: domain-based ad blocking with SQLite blocklist
+- Quality gates documented in project config
 
 ### v0.1.0 — 2026-02-16
 

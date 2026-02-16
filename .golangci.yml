@@ -1,0 +1,57 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gocognit
+    - gocritic
+    - gocyclo
+    - govet
+    - lll
+    - unparam
+    - unused
+    - cyclop
+    - gosec
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gocognit:
+      min-complexity: 50
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - octalLiteral
+    gocyclo:
+      min-complexity: 25
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    lll:
+      line-length: 150
+    unparam:
+      check-exported: true
+    cyclop:
+      max-complexity: 25
+    gosec:
+      excludes:
+        - G304
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - unused
+
+run:
+  timeout: 5m

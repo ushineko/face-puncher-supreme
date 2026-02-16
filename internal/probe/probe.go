@@ -48,6 +48,6 @@ func Handler(stats Stats) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp) //nolint:errcheck // best-effort response
+		_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // best-effort response
 	}
 }

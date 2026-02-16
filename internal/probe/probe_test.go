@@ -58,7 +58,7 @@ func TestProbeHandler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := probe.Handler(tt.stats)
-			req := httptest.NewRequest(http.MethodGet, "/fps/probe", nil)
+			req := httptest.NewRequest(http.MethodGet, "/fps/probe", http.NoBody)
 			rec := httptest.NewRecorder()
 
 			handler(rec, req)

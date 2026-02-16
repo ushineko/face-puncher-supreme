@@ -61,8 +61,9 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/fps/", s.handleManagement)
 
 	s.httpServer = &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: s, // Server itself implements http.Handler
+		Addr:              cfg.ListenAddr,
+		Handler:           s, // Server itself implements http.Handler
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	return s
@@ -132,7 +133,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body close in defer
 
 	removeHopByHopHeaders(resp.Header)
 
@@ -197,19 +198,19 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-		destConn.Close()
+		_ = destConn.Close()
 		return
 	}
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("hijack error: %v", err), http.StatusInternalServerError)
-		destConn.Close()
+		_ = destConn.Close()
 		return
 	}
 
 	// Send 200 Connection Established to the client.
-	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")) //nolint:errcheck // best-effort
+	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")) //nolint:gosec // best-effort
 
 	s.logger.Info("connect",
 		"host", r.Host,
@@ -219,14 +220,14 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Bidirectional copy — track bytes for verbose logging.
 	var uploadBytes, downloadBytes atomic.Int64
 	go func() {
-		defer destConn.Close()
-		defer clientConn.Close()
+		defer func() { _ = destConn.Close() }()
+		defer func() { _ = clientConn.Close() }()
 		n, _ := io.Copy(destConn, clientConn) //nolint:errcheck // tunnel streaming
 		uploadBytes.Store(n)
 	}()
 	go func() {
-		defer destConn.Close()
-		defer clientConn.Close()
+		defer func() { _ = destConn.Close() }()
+		defer func() { _ = clientConn.Close() }()
 		n, _ := io.Copy(clientConn, destConn) //nolint:errcheck // tunnel streaming
 		downloadBytes.Store(n)
 

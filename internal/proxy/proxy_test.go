@@ -31,7 +31,7 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := proxy.New(proxy.Config{
@@ -39,14 +39,14 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 		Logger:     logger,
 	})
 
-	go srv.ListenAndServe()
+	go func() { _ = srv.ListenAndServe() }()
 
 	// Wait for the server to be ready.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
+		conn, dialErr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -55,13 +55,13 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 	return "http://" + addr, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		srv.Shutdown(ctx)
+		_ = srv.Shutdown(ctx)
 	}
 }
 
 // _proxyClient returns an http.Client configured to use the given proxy.
 func _proxyClient(proxyURL string) *http.Client {
-	pURL, _ := url.Parse(proxyURL)
+	pURL, _ := url.Parse(proxyURL) //nolint:errcheck // test helper, URL always valid
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:           http.ProxyURL(pURL),
@@ -125,7 +125,7 @@ func TestHTTPForwardProxy(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "hello from upstream")
+		_, _ = fmt.Fprint(w, "hello from upstream")
 	}))
 	defer upstream.Close()
 
@@ -149,7 +149,7 @@ func TestHTTPForwardProxyPreservesHeaders(t *testing.T) {
 		w.Header().Set("X-Custom-Header", "preserved")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{"ok": true}`)
+		_, _ = fmt.Fprint(w, `{"ok": true}`)
 	}))
 	defer upstream.Close()
 
@@ -181,7 +181,8 @@ func TestHTTPForwardProxyStripsHopByHopHeaders(t *testing.T) {
 	defer cleanup()
 
 	client := _proxyClient(proxyURL)
-	req, _ := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL, http.NoBody)
+	require.NoError(t, err)
 	req.Header.Set("Proxy-Authorization", "Basic secret")
 
 	resp, err := client.Do(req)
@@ -195,7 +196,7 @@ func TestHTTPSConnectTunnel(t *testing.T) {
 	// Create an HTTPS test server.
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "hello from tls upstream")
+		_, _ = fmt.Fprint(w, "hello from tls upstream")
 	}))
 	defer upstream.Close()
 
@@ -204,7 +205,11 @@ func TestHTTPSConnectTunnel(t *testing.T) {
 
 	client := _proxyClient(proxyURL)
 	// Override the TLS config to trust the test server's cert.
-	client.Transport.(*http.Transport).TLSClientConfig = upstream.Client().Transport.(*http.Transport).TLSClientConfig
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	upstreamTransport, ok := upstream.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport.TLSClientConfig = upstreamTransport.TLSClientConfig
 
 	resp, err := client.Get(upstream.URL)
 	require.NoError(t, err)
@@ -221,7 +226,7 @@ func TestConcurrentConnections(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
+		_, _ = fmt.Fprint(w, "ok")
 	}))
 	defer upstream.Close()
 
@@ -263,7 +268,8 @@ func TestMalformedRequest(t *testing.T) {
 
 	// A GET request without a host (direct to proxy, not a proxy request
 	// and not a management endpoint) should return 400.
-	req, _ := http.NewRequest(http.MethodGet, proxyURL+"/some/path", nil)
+	req, err := http.NewRequest(http.MethodGet, proxyURL+"/some/path", http.NoBody)
+	require.NoError(t, err)
 	// Clear the host to simulate a malformed proxy request.
 	// When sending directly, the URL host is set to the proxy, which makes
 	// this a non-proxy request. The proxy should handle it gracefully.
@@ -290,7 +296,7 @@ func TestProbeConnectionCounters(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		resp, err := client.Get(upstream.URL)
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// Check probe counters.
@@ -313,7 +319,7 @@ func TestLargeResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, largeBody)
+		_, _ = fmt.Fprint(w, largeBody)
 	}))
 	defer upstream.Close()
 
@@ -336,7 +342,7 @@ func TestGracefulShutdown(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := proxy.New(proxy.Config{
@@ -352,9 +358,9 @@ func TestGracefulShutdown(t *testing.T) {
 	// Wait for server to start.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
+		conn, dialErr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
