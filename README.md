@@ -11,6 +11,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Domain Blocking](#domain-blocking)
 - [Allowlist and Inline Blocklist](#allowlist-and-inline-blocklist)
 - [MITM TLS Interception](#mitm-tls-interception)
+- [Content Filter Plugins](#content-filter-plugins)
 - [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
 - [Test](#test)
@@ -167,6 +168,29 @@ MITM is HTTP/1.1 only. The proxy generates short-lived leaf certificates (24h) p
 
 - `fpsd generate-ca` — Create CA cert and key (refuses to overwrite; use `--force` to regenerate)
 
+## Content Filter Plugins
+
+Plugins are site-specific content filters that inspect and modify MITM'd HTTP responses. Each plugin targets a set of domains and operates in one of two modes:
+
+- **intercept** — captures request/response pairs to disk for offline analysis (development tool)
+- **filter** — applies content filtering rules, replacing matched ad content with placeholder markers
+
+```yaml
+plugins:
+  reddit-promotions:
+    enabled: true
+    mode: "intercept"        # "intercept" or "filter"
+    placeholder: "visible"   # "visible", "comment", or "none"
+    domains:
+      - www.reddit.com
+    options:
+      log_matches: true
+```
+
+Plugin domains must be a subset of `mitm.domains`. Placeholder markers indicate what was filtered: `visible` shows a styled HTML element, `comment` inserts an HTML comment, `none` removes content silently.
+
+Plugins are compiled statically into the binary. Adding a new plugin means registering its constructor in `internal/plugin/registry.go` and rebuilding. Plugin stats appear in `/fps/stats` and `/fps/heartbeat`.
+
 ## Management Endpoints
 
 ### `/fps/heartbeat` — Health Check
@@ -237,6 +261,7 @@ internal/config/    YAML config loading, validation, CLI merge
 internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
 internal/blocklist/ Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
 internal/mitm/      Per-domain TLS interception (CA, leaf certs, HTTP proxy loop)
+internal/plugin/    Content filter plugin architecture (registry, interception, markers)
 internal/probe/     Management endpoints (heartbeat + stats)
 internal/stats/     In-memory counters and SQLite stats persistence
 internal/logging/   Structured logging with file rotation
@@ -247,6 +272,25 @@ fpsd.yml            Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v0.8.0 — 2026-02-16
+
+- Content filter plugin architecture for site-specific MITM response modification (spec 007)
+- `ContentFilter` interface: `Name()`, `Version()`, `Domains()`, `Init()`, `Filter()`
+- Plugin registry with compile-time constructors; adding a plugin is one line of code
+- Interception mode: captures MITM traffic to disk (`intercepts/<plugin>/`) for offline analysis
+- Placeholder markers: `visible` (styled HTML), `comment` (HTML comment), `none` (clean removal)
+- Shared `Marker()` helper generates format-appropriate placeholders for HTML and JSON
+- Response buffering in MITM proxyLoop for text Content-Types (text/*, application/json, etc.)
+- Binary responses (images, video, fonts) bypass buffering; 10MB body size cap
+- Modified responses update `Content-Length` header automatically
+- Plugin config section in `fpsd.yml`: `enabled`, `mode`, `placeholder`, `domains`, `options`
+- Config validation: registry existence, mode/placeholder values, domain subset of `mitm.domains`
+- Plugin stats in `/fps/stats`: per-plugin inspected/matched/modified counts, top rules
+- Heartbeat shows `plugins_active` count and plugin `name@version` list
+- Reddit promotions stub plugin registered (interception mode for traffic analysis)
+- 26 new tests: marker generation, content-type filtering, registry dispatch, interception capture
+- 142 total tests (all passing)
 
 ### v0.7.0 — 2026-02-16
 

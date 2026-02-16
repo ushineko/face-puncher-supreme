@@ -51,12 +51,24 @@ stats:
 
 # MITM — per-domain TLS interception for content-level ad blocking.
 # Requires CA cert: run `fpsd generate-ca` first, then install CA on clients.
-# mitm:
-#   ca_cert: "ca-cert.pem"     # CA certificate path (relative to data_dir)
-#   ca_key: "ca-key.pem"       # CA private key path (relative to data_dir)
-#   domains:                    # Exact domains to intercept (lowercase)
-#     - www.reddit.com
-#     - old.reddit.com
+mitm:
+  ca_cert: "ca-cert.pem"
+  ca_key: "ca-key.pem"
+  domains:
+    - www.reddit.com
+    - old.reddit.com
+
+# Content filter plugins — site-specific filters for MITM'd domains.
+# Each plugin targets a set of domains and operates in "intercept" or "filter" mode.
+plugins:
+  reddit-promotions:
+    enabled: true
+    mode: "intercept"        # "intercept" captures traffic; "filter" applies rules
+    placeholder: "visible"   # "visible", "comment", or "none"
+    domains:
+      - www.reddit.com
+    options:
+      log_matches: true
 
 # Management endpoints.
 management:

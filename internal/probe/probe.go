@@ -45,19 +45,35 @@ type TopEntry struct {
 	Count  int64  `json:"count"`
 }
 
+// PluginInfo holds per-plugin metadata for heartbeat/stats.
+type PluginInfo struct {
+	Name    string
+	Version string
+	Mode    string
+	Domains []string
+}
+
+// PluginsData holds plugin metadata for responses.
+type PluginsData struct {
+	Active  int
+	Plugins []PluginInfo
+}
+
 // HeartbeatResponse is the JSON structure returned by /fps/heartbeat.
 type HeartbeatResponse struct {
-	Status        string `json:"status"`
-	Service       string `json:"service"`
-	Version       string `json:"version"`
-	Mode          string `json:"mode"`
-	MITMEnabled   bool   `json:"mitm_enabled"`
-	MITMDomains   int    `json:"mitm_domains"`
-	UptimeSeconds int64  `json:"uptime_seconds"`
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	GoVersion     string `json:"go_version"`
-	StartedAt     string `json:"started_at"`
+	Status        string   `json:"status"`
+	Service       string   `json:"service"`
+	Version       string   `json:"version"`
+	Mode          string   `json:"mode"`
+	MITMEnabled   bool     `json:"mitm_enabled"`
+	MITMDomains   int      `json:"mitm_domains"`
+	PluginsActive int      `json:"plugins_active"`
+	Plugins       []string `json:"plugins"`
+	UptimeSeconds int64    `json:"uptime_seconds"`
+	OS            string   `json:"os"`
+	Arch          string   `json:"arch"`
+	GoVersion     string   `json:"go_version"`
+	StartedAt     string   `json:"started_at"`
 }
 
 // StatsResponse is the JSON structure returned by /fps/stats.
@@ -65,9 +81,34 @@ type StatsResponse struct {
 	Connections ConnectionsBlock `json:"connections"`
 	Blocking    BlockingBlock    `json:"blocking"`
 	MITM        MITMBlock        `json:"mitm"`
+	Plugins     PluginsBlock     `json:"plugins"`
 	Domains     DomainsBlock     `json:"domains"`
 	Clients     ClientsBlock     `json:"clients"`
 	Traffic     TrafficBlock     `json:"traffic"`
+}
+
+// PluginsBlock holds plugin filter statistics.
+type PluginsBlock struct {
+	Active  int                 `json:"active"`
+	Filters []PluginFilterEntry `json:"filters"`
+}
+
+// PluginFilterEntry holds per-plugin stats for the stats response.
+type PluginFilterEntry struct {
+	Name               string          `json:"name"`
+	Version            string          `json:"version"`
+	Mode               string          `json:"mode"`
+	Domains            []string        `json:"domains"`
+	ResponsesInspected int64           `json:"responses_inspected"`
+	ResponsesMatched   int64           `json:"responses_matched"`
+	ResponsesModified  int64           `json:"responses_modified"`
+	TopRules           []RuleCountJSON `json:"top_rules"`
+}
+
+// RuleCountJSON is the JSON-friendly version of a rule count.
+type RuleCountJSON struct {
+	Rule  string `json:"rule"`
+	Count int64  `json:"count"`
 }
 
 // MITMBlock holds MITM interception statistics.
@@ -124,7 +165,7 @@ type TrafficBlock struct {
 
 // HeartbeatHandler returns an http.HandlerFunc for the heartbeat endpoint.
 // No database queries, no sorting — just reads atomics and static values.
-func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData) http.HandlerFunc {
+func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData, pluginsFn func() *PluginsData) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		mode := "passthrough"
 		if blockFn != nil {
@@ -142,6 +183,20 @@ func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() 
 			}
 		}
 
+		var pluginsActive int
+		var pluginList []string
+		if pluginsFn != nil {
+			if pd := pluginsFn(); pd != nil {
+				pluginsActive = pd.Active
+				for _, p := range pd.Plugins {
+					pluginList = append(pluginList, p.Name+"@"+p.Version)
+				}
+			}
+		}
+		if pluginList == nil {
+			pluginList = []string{}
+		}
+
 		resp := HeartbeatResponse{
 			Status:        "ok",
 			Service:       "face-puncher-supreme",
@@ -149,6 +204,8 @@ func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() 
 			Mode:          mode,
 			MITMEnabled:   mitmEnabled,
 			MITMDomains:   mitmDomains,
+			PluginsActive: pluginsActive,
+			Plugins:       pluginList,
 			UptimeSeconds: int64(info.Uptime().Seconds()),
 			OS:            runtime.GOOS,
 			Arch:          runtime.GOARCH,
@@ -167,6 +224,7 @@ type StatsProvider struct {
 	Info      ServerInfo
 	BlockFn   func() *BlockData
 	MITMFn    func() *MITMData
+	PluginsFn func() *PluginsData
 	StatsDB   *stats.DB
 	Collector *stats.Collector
 }
@@ -279,6 +337,8 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 		}
 		mitmBlock.TopIntercepted = topMITM
 
+		pluginsBlock := buildPluginsBlock(sp, n)
+
 		resp := StatsResponse{
 			Connections: ConnectionsBlock{
 				Total:  sp.Info.ConnectionsTotal(),
@@ -293,7 +353,8 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 				TopBlocked:       topBlocked,
 				TopAllowed:       topAllowed,
 			},
-			MITM: mitmBlock,
+			MITM:    mitmBlock,
+			Plugins: pluginsBlock,
 			Domains: DomainsBlock{
 				TopRequested: topRequested,
 			},
@@ -323,6 +384,47 @@ func StatsDisabledHandler() http.HandlerFunc {
 			"error": "stats collection is disabled",
 		})
 	}
+}
+
+// buildPluginsBlock constructs the plugins section for the stats response.
+func buildPluginsBlock(sp *StatsProvider, n int) PluginsBlock {
+	block := PluginsBlock{Filters: []PluginFilterEntry{}}
+	if sp.PluginsFn == nil {
+		return block
+	}
+	pd := sp.PluginsFn()
+	if pd == nil {
+		return block
+	}
+	block.Active = pd.Active
+	snaps := sp.Collector.SnapshotPlugins()
+	for _, pi := range pd.Plugins {
+		entry := PluginFilterEntry{
+			Name:    pi.Name,
+			Version: pi.Version,
+			Mode:    pi.Mode,
+			Domains: pi.Domains,
+		}
+		for _, s := range snaps {
+			if s.Name == pi.Name {
+				entry.ResponsesInspected = s.Inspected
+				entry.ResponsesMatched = s.Matched
+				entry.ResponsesModified = s.Modified
+				break
+			}
+		}
+		rules := sp.Collector.SnapshotPluginRules(pi.Name, n)
+		topRules := make([]RuleCountJSON, len(rules))
+		for j, r := range rules {
+			topRules[j] = RuleCountJSON{Rule: r.Rule, Count: r.Count}
+		}
+		entry.TopRules = topRules
+		if entry.Domains == nil {
+			entry.Domains = []string{}
+		}
+		block.Filters = append(block.Filters, entry)
+	}
+	return block
 }
 
 // domainCountsToEntries converts stats.DomainCount slice to TopEntry slice.

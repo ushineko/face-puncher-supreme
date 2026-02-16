@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"github.com/ushineko/face-puncher-supreme/internal/config"
 	"github.com/ushineko/face-puncher-supreme/internal/logging"
 	"github.com/ushineko/face-puncher-supreme/internal/mitm"
+	"github.com/ushineko/face-puncher-supreme/internal/plugin"
 	"github.com/ushineko/face-puncher-supreme/internal/probe"
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
 	"github.com/ushineko/face-puncher-supreme/internal/stats"
@@ -274,6 +276,12 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		logger.Info("mitm disabled")
 	}
 
+	// Initialize content filter plugins.
+	pluginsDataFn, err := initPlugins(&cfg, mitmInterceptor, collector, logger)
+	if err != nil {
+		return err
+	}
+
 	// Initialize stats DB if enabled.
 	var statsDB *stats.DB
 	if cfg.Stats.Enabled {
@@ -310,13 +318,14 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	})
 
 	// Now build real handlers with the actual ServerInfo (srv).
-	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn)
+	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn, pluginsDataFn)
 	var statsHandler http.HandlerFunc
 	if cfg.Stats.Enabled {
 		statsHandler = probe.StatsHandler(&probe.StatsProvider{
 			Info:      srv,
 			BlockFn:   blockDataFn,
 			MITMFn:    mitmDataFn,
+			PluginsFn: pluginsDataFn,
 			StatsDB:   statsDB,
 			Collector: collector,
 		})
@@ -446,6 +455,66 @@ func runGenerateCA(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stderr, "CA private key: %s\n", keyPath)
 	fmt.Fprintln(os.Stderr, "Install the CA certificate on client devices to enable MITM interception.")
 	return nil
+}
+
+// initPlugins initializes content filter plugins and wires them into the MITM
+// interceptor. Returns a PluginsData callback for heartbeat/stats, or nil if
+// no plugins are active.
+func initPlugins(
+	cfg *config.Config,
+	mitmInterceptor *mitm.Interceptor,
+	collector *stats.Collector,
+	logger *slog.Logger,
+) (func() *probe.PluginsData, error) {
+	if len(cfg.Plugins) == 0 || mitmInterceptor == nil {
+		return nil, nil
+	}
+
+	// Convert config.PluginConf to plugin.PluginConfig.
+	pluginConfigs := make(map[string]plugin.PluginConfig, len(cfg.Plugins))
+	for name, pc := range cfg.Plugins {
+		opts := pc.Options
+		if opts == nil {
+			opts = map[string]any{}
+		}
+		opts["data_dir"] = cfg.DataDir
+		pluginConfigs[name] = plugin.PluginConfig{
+			Enabled:     pc.Enabled,
+			Mode:        pc.Mode,
+			Placeholder: pc.Placeholder,
+			Domains:     pc.Domains,
+			Options:     opts,
+		}
+	}
+
+	results, initErr := plugin.InitPlugins(pluginConfigs, cfg.MITM.Domains, logger)
+	if initErr != nil {
+		return nil, fmt.Errorf("plugin init: %w", initErr)
+	}
+
+	// Wire response modifier into MITM interceptor.
+	modifier := plugin.BuildResponseModifier(results, func(pluginName, rule string, modified bool, removed int) {
+		collector.RecordPluginMatch(pluginName, rule, modified, removed)
+	}, logger)
+	if modifier != nil {
+		mitmInterceptor.ResponseModifier = modifier
+	}
+
+	logger.Info("plugins initialized", "active", len(results))
+
+	dataFn := func() *probe.PluginsData {
+		pd := &probe.PluginsData{Active: len(results)}
+		for _, r := range results {
+			pd.Plugins = append(pd.Plugins, probe.PluginInfo{
+				Name:    r.Plugin.Name(),
+				Version: r.Plugin.Version(),
+				Mode:    r.Config.Mode,
+				Domains: r.Config.Domains,
+			})
+		}
+		return pd
+	}
+	return dataFn, nil
 }
 
 // makeBlockDataFn creates a callback that gathers block stats from the blocklist.

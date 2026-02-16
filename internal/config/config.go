@@ -22,17 +22,27 @@ import (
 
 // Config is the top-level configuration for fpsd.
 type Config struct {
-	Listen        string     `yaml:"listen"`
-	LogDir        string     `yaml:"log_dir"`
-	Verbose       bool       `yaml:"verbose"`
-	DataDir       string     `yaml:"data_dir"`
-	BlocklistURLs []string   `yaml:"blocklist_urls"`
-	Blocklist     []string   `yaml:"blocklist"`
-	Allowlist     []string   `yaml:"allowlist"`
-	MITM          MITM       `yaml:"mitm"`
-	Timeouts      Timeouts   `yaml:"timeouts"`
-	Management    Management `yaml:"management"`
-	Stats         Stats      `yaml:"stats"`
+	Listen        string                `yaml:"listen"`
+	LogDir        string                `yaml:"log_dir"`
+	Verbose       bool                  `yaml:"verbose"`
+	DataDir       string                `yaml:"data_dir"`
+	BlocklistURLs []string              `yaml:"blocklist_urls"`
+	Blocklist     []string              `yaml:"blocklist"`
+	Allowlist     []string              `yaml:"allowlist"`
+	MITM          MITM                  `yaml:"mitm"`
+	Plugins       map[string]PluginConf `yaml:"plugins"`
+	Timeouts      Timeouts              `yaml:"timeouts"`
+	Management    Management            `yaml:"management"`
+	Stats         Stats                 `yaml:"stats"`
+}
+
+// PluginConf holds per-plugin configuration from fpsd.yml.
+type PluginConf struct {
+	Enabled     bool           `yaml:"enabled"`
+	Mode        string         `yaml:"mode"`
+	Placeholder string         `yaml:"placeholder"`
+	Domains     []string       `yaml:"domains"`
+	Options     map[string]any `yaml:"options"`
 }
 
 // MITM holds per-domain TLS interception configuration.
@@ -165,6 +175,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, validateBlocklist(c.Blocklist)...)
 	errs = append(errs, validateAllowlist(c.Allowlist)...)
 	errs = append(errs, validateMITM(c.MITM)...)
+	errs = append(errs, validatePlugins(c.Plugins)...)
 
 	// Durations must be positive.
 	if c.Timeouts.Shutdown.Duration <= 0 {
@@ -247,6 +258,33 @@ func validateMITM(m MITM) []string {
 	for i, d := range m.Domains {
 		if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {
 			errs = append(errs, fmt.Sprintf("mitm.domains[%d]: invalid domain %q", i, d))
+		}
+	}
+	return errs
+}
+
+// validatePlugins checks that plugin configuration entries are well-formed.
+// Note: registry existence and MITM domain subset checks happen at runtime
+// in plugin.InitPlugins, since config doesn't know about the plugin registry.
+func validatePlugins(plugins map[string]PluginConf) []string {
+	var errs []string
+	validModes := map[string]bool{"intercept": true, "filter": true, "": true}
+	validPlaceholders := map[string]bool{"visible": true, "comment": true, "none": true, "": true}
+
+	for name, p := range plugins {
+		if !p.Enabled {
+			continue
+		}
+		if !validModes[p.Mode] {
+			errs = append(errs, fmt.Sprintf("plugins.%s.mode: must be \"intercept\" or \"filter\", got %q", name, p.Mode))
+		}
+		if !validPlaceholders[p.Placeholder] {
+			errs = append(errs, fmt.Sprintf("plugins.%s.placeholder: must be \"visible\", \"comment\", or \"none\", got %q", name, p.Placeholder))
+		}
+		for i, d := range p.Domains {
+			if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {
+				errs = append(errs, fmt.Sprintf("plugins.%s.domains[%d]: invalid domain %q", name, i, d))
+			}
 		}
 	}
 	return errs

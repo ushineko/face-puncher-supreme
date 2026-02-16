@@ -46,7 +46,7 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 	})
 	// Set real handlers now that srv exists.
 	srv.SetHandlers(
-		probe.HeartbeatHandler(srv, nil, nil),
+		probe.HeartbeatHandler(srv, nil, nil, nil),
 		probe.StatsHandler(&probe.StatsProvider{
 			Info:      srv,
 			Collector: collector,
@@ -388,7 +388,7 @@ func _startTestProxyWithBlocker(t *testing.T, blocker proxy.Blocker) (proxyURL s
 		OnTunnelClose:    collector.RecordBytes,
 	})
 	srv.SetHandlers(
-		probe.HeartbeatHandler(srv, nil, nil),
+		probe.HeartbeatHandler(srv, nil, nil, nil),
 		probe.StatsHandler(&probe.StatsProvider{
 			Info:      srv,
 			Collector: collector,

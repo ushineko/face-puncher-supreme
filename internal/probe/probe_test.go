@@ -68,7 +68,7 @@ func TestHeartbeatHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := probe.HeartbeatHandler(tt.info, nil, nil)
+			handler := probe.HeartbeatHandler(tt.info, nil, nil, nil)
 			req := httptest.NewRequest(http.MethodGet, "/fps/heartbeat", http.NoBody)
 			rec := httptest.NewRecorder()
 
@@ -88,7 +88,7 @@ func TestHeartbeatHandler(t *testing.T) {
 
 func TestHeartbeatHandlerPassthroughDefaults(t *testing.T) {
 	info := &_mockServerInfo{startedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	handler := probe.HeartbeatHandler(info, nil, nil)
+	handler := probe.HeartbeatHandler(info, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/fps/heartbeat", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -111,7 +111,7 @@ func TestHeartbeatHandlerBlockingMode(t *testing.T) {
 	}
 
 	info := &_mockServerInfo{total: 100, startedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	handler := probe.HeartbeatHandler(info, blockFn, nil)
+	handler := probe.HeartbeatHandler(info, blockFn, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/fps/heartbeat", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -222,7 +222,7 @@ func TestHeartbeatNoDBQueries(t *testing.T) {
 		startedAt: time.Date(2026, 2, 16, 10, 0, 0, 0, time.UTC),
 	}
 
-	handler := probe.HeartbeatHandler(info, nil, nil)
+	handler := probe.HeartbeatHandler(info, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/fps/heartbeat", http.NoBody)
 	rec := httptest.NewRecorder()
 

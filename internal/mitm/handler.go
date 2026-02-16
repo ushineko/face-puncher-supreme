@@ -2,12 +2,14 @@ package mitm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -228,21 +230,69 @@ func (i *Interceptor) proxyLoop(clientTLS, upstreamTLS *tls.Conn, domain, client
 		// Strip hop-by-hop headers from upstream response.
 		removeHopByHopHeaders(resp.Header)
 
-		// Forward response to client.
-		if writeErr := resp.Write(clientTLS); writeErr != nil {
+		// If ResponseModifier is set and content is text-based, buffer and modify.
+		if i.ResponseModifier != nil && isTextContent(resp.Header.Get("Content-Type")) {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBufferSize+1))
 			_ = resp.Body.Close()
-			if !isClosedConnErr(writeErr) {
-				i.logger.Warn("mitm client response write failed",
+
+			if readErr != nil {
+				i.logger.Error("mitm response body read failed",
 					"domain", domain,
-					"client", clientIP,
-					"method", req.Method,
 					"url", req.URL.String(),
-					"error", writeErr,
+					"error", readErr,
 				)
+				break
 			}
-			break
+
+			// Only modify if within size limit.
+			if int64(len(body)) <= maxBufferSize {
+				modified, modErr := i.ResponseModifier(domain, req, resp, body)
+				if modErr != nil {
+					i.logger.Error("mitm response modifier failed",
+						"domain", domain,
+						"url", req.URL.String(),
+						"error", modErr,
+					)
+					break
+				}
+				body = modified
+			}
+
+			// Write modified response with updated Content-Length.
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			resp.Header.Del("Transfer-Encoding")
+
+			if writeErr := resp.Write(clientTLS); writeErr != nil {
+				if !isClosedConnErr(writeErr) {
+					i.logger.Warn("mitm client response write failed",
+						"domain", domain,
+						"client", clientIP,
+						"method", req.Method,
+						"url", req.URL.String(),
+						"error", writeErr,
+					)
+				}
+				break
+			}
+		} else {
+			// Stream through unmodified (binary content or no modifier).
+			if writeErr := resp.Write(clientTLS); writeErr != nil {
+				_ = resp.Body.Close()
+				if !isClosedConnErr(writeErr) {
+					i.logger.Warn("mitm client response write failed",
+						"domain", domain,
+						"client", clientIP,
+						"method", req.Method,
+						"url", req.URL.String(),
+						"error", writeErr,
+					)
+				}
+				break
+			}
+			_ = resp.Body.Close()
 		}
-		_ = resp.Body.Close()
 
 		requests++
 		i.InterceptsTotal.Add(1)
@@ -296,6 +346,27 @@ func removeHopByHopHeaders(h http.Header) {
 // The caller should defer cancel() to release resources promptly.
 func timeoutCtx(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
+}
+
+// maxBufferSize is the maximum response body size that will be buffered
+// for plugin inspection. Responses larger than this stream through unmodified.
+const maxBufferSize = 10 * 1024 * 1024 // 10MB
+
+// isTextContent returns true if the Content-Type is text-based and should
+// be buffered for plugin inspection.
+func isTextContent(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if idx := strings.IndexByte(ct, ';'); idx >= 0 {
+		ct = strings.TrimSpace(ct[:idx])
+	}
+	if strings.HasPrefix(ct, "text/") {
+		return true
+	}
+	switch ct {
+	case "application/json", "application/javascript", "application/xml":
+		return true
+	}
+	return false
 }
 
 // isClosedConnErr returns true if the error indicates a closed connection,

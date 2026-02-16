@@ -35,6 +35,12 @@ type Collector struct {
 
 	// Per-domain MITM intercept counts.
 	mitmIntercepts sync.Map // string -> *atomic.Int64
+
+	// Per-plugin filter counters.
+	pluginInspected sync.Map // string -> *atomic.Int64
+	pluginMatched   sync.Map // string -> *atomic.Int64
+	pluginModified  sync.Map // string -> *atomic.Int64
+	pluginRules     sync.Map // "plugin:rule" -> *atomic.Int64
 }
 
 // NewCollector creates a new in-memory stats collector.
@@ -203,4 +209,90 @@ func (c *Collector) TotalBytesOut() int64 {
 		return true
 	})
 	return total
+}
+
+// RecordPluginInspected records that a plugin inspected a response.
+func (c *Collector) RecordPluginInspected(pluginName string) {
+	v, _ := c.pluginInspected.LoadOrStore(pluginName, &atomic.Int64{})
+	v.(*atomic.Int64).Add(1) //nolint:errcheck // type is guaranteed by LoadOrStore
+}
+
+// RecordPluginMatch records that a plugin matched and optionally modified a response.
+func (c *Collector) RecordPluginMatch(pluginName, rule string, modified bool, removed int) {
+	mv, _ := c.pluginMatched.LoadOrStore(pluginName, &atomic.Int64{})
+	mv.(*atomic.Int64).Add(1) //nolint:errcheck // type is guaranteed by LoadOrStore
+
+	if modified {
+		modv, _ := c.pluginModified.LoadOrStore(pluginName, &atomic.Int64{})
+		modv.(*atomic.Int64).Add(1) //nolint:errcheck // type is guaranteed by LoadOrStore
+	}
+
+	if rule != "" {
+		key := pluginName + ":" + rule
+		rv, _ := c.pluginRules.LoadOrStore(key, &atomic.Int64{})
+		rv.(*atomic.Int64).Add(int64(removed)) //nolint:errcheck // type is guaranteed by LoadOrStore
+	}
+}
+
+// PluginSnapshot holds a point-in-time view of per-plugin counters.
+type PluginSnapshot struct {
+	Name      string
+	Inspected int64
+	Matched   int64
+	Modified  int64
+}
+
+// SnapshotPlugins returns current per-plugin filter stats.
+func (c *Collector) SnapshotPlugins() []PluginSnapshot {
+	var out []PluginSnapshot
+	c.pluginInspected.Range(func(key, value any) bool {
+		name, _ := key.(string)            //nolint:errcheck // type is guaranteed
+		counter, _ := value.(*atomic.Int64) //nolint:errcheck // type is guaranteed
+		snap := PluginSnapshot{
+			Name:      name,
+			Inspected: counter.Load(),
+		}
+		if mv, ok := c.pluginMatched.Load(name); ok {
+			snap.Matched = mv.(*atomic.Int64).Load() //nolint:errcheck // type is guaranteed
+		}
+		if modv, ok := c.pluginModified.Load(name); ok {
+			snap.Modified = modv.(*atomic.Int64).Load() //nolint:errcheck // type is guaranteed
+		}
+		out = append(out, snap)
+		return true
+	})
+	return out
+}
+
+// RuleCount holds a rule name and its match count.
+type RuleCount struct {
+	Rule  string
+	Count int64
+}
+
+// SnapshotPluginRules returns per-rule match counts for a given plugin.
+func (c *Collector) SnapshotPluginRules(pluginName string, n int) []RuleCount {
+	prefix := pluginName + ":"
+	var out []RuleCount
+	c.pluginRules.Range(func(key, value any) bool {
+		k, _ := key.(string)              //nolint:errcheck // type is guaranteed
+		counter, _ := value.(*atomic.Int64) //nolint:errcheck // type is guaranteed
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			out = append(out, RuleCount{
+				Rule:  k[len(prefix):],
+				Count: counter.Load(),
+			})
+		}
+		return true
+	})
+	// Sort by count descending (insertion sort, small N).
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].Count > out[j-1].Count; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
