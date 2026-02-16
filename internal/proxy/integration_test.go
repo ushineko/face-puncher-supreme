@@ -264,7 +264,7 @@ func TestIntegrationNewsSites(t *testing.T) {
 	}
 }
 
-func TestIntegrationProbeCountersIncrement(t *testing.T) {
+func TestIntegrationHeartbeatCountersIncrement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -273,8 +273,8 @@ func TestIntegrationProbeCountersIncrement(t *testing.T) {
 	defer cleanup()
 	client := _integrationProxyClient(t, proxyURL)
 
-	// Get baseline.
-	baseline := _getProbeTotal(t, proxyURL)
+	// Get baseline from stats endpoint.
+	baseline := _getStatsConnTotal(t, proxyURL)
 
 	// Make a few proxied requests.
 	for _, site := range []string{
@@ -288,24 +288,26 @@ func TestIntegrationProbeCountersIncrement(t *testing.T) {
 	}
 
 	// Verify counters increased.
-	after := _getProbeTotal(t, proxyURL)
+	after := _getStatsConnTotal(t, proxyURL)
 	assert.GreaterOrEqual(t, after-baseline, int64(3),
-		"connections_total should have increased by at least 3")
+		"connections.total should have increased by at least 3")
 }
 
-// _getProbeTotal hits the probe endpoint directly and returns connections_total.
-func _getProbeTotal(t *testing.T, proxyURL string) int64 {
+// _getStatsConnTotal hits the stats endpoint directly and returns connections.total.
+func _getStatsConnTotal(t *testing.T, proxyURL string) int64 {
 	t.Helper()
-	resp, err := http.Get(proxyURL + "/fps/probe")
+	resp, err := http.Get(proxyURL + "/fps/stats")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var probeResp struct {
-		ConnectionsTotal int64 `json:"connections_total"`
+	var statsResp struct {
+		Connections struct {
+			Total int64 `json:"total"`
+		} `json:"connections"`
 	}
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	err = json.Unmarshal(body, &probeResp)
+	err = json.Unmarshal(body, &statsResp)
 	require.NoError(t, err)
-	return probeResp.ConnectionsTotal
+	return statsResp.Connections.Total
 }

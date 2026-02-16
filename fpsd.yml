@@ -13,7 +13,7 @@ log_dir: "logs"
 # Verbose — enable DEBUG-level logging (full headers, byte counts, timing).
 verbose: false
 
-# Data directory — where blocklist.db (and future stats.db) are stored.
+# Data directory — where blocklist.db and stats.db are stored.
 data_dir: "."
 
 # Blocklist URLs — Pi-hole compatible blocklists. Comment out any you don't want.
@@ -29,6 +29,11 @@ timeouts:
   shutdown: "5s"       # graceful shutdown deadline
   connect: "10s"       # upstream TCP dial timeout
   read_header: "10s"   # client request header read timeout
+
+# Statistics — in-memory counters flushed to SQLite for persistence.
+stats:
+  enabled: true          # set to false to disable stats collection entirely
+  flush_interval: "60s"  # how often in-memory counters are flushed to stats.db
 
 # Management endpoints.
 management:

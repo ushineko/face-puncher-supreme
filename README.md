@@ -9,7 +9,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Run](#run)
 - [CLI Flags](#cli-flags)
 - [Domain Blocking](#domain-blocking)
-- [Probe Endpoint](#probe-endpoint)
+- [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
 - [Test](#test)
 - [Lint](#lint)
@@ -107,15 +107,35 @@ Supported list formats: hosts (`0.0.0.0 domain`), adblock (`||domain^`), and dom
 
 With no blocklist URLs (neither in config file nor via `--blocklist-url` flags), the proxy runs in passthrough mode (no blocking).
 
-## Probe Endpoint
+## Management Endpoints
 
-Verify the proxy is running:
+### `/fps/heartbeat` — Health Check
+
+Lightweight health check for monitoring. No database queries or sorting.
 
 ```bash
-curl -s http://localhost:18737/fps/probe | python3 -m json.tool
+curl -s http://localhost:18737/fps/heartbeat | python3 -m json.tool
 ```
 
-Returns JSON with status, version, mode, uptime, connection counters, and block statistics (`blocks_total`, `blocklist_size`, `blocklist_sources`, `top_blocked`).
+Returns JSON with status, version, mode, uptime, OS info, and startup timestamp.
+
+### `/fps/stats` — Full Statistics
+
+Detailed traffic, blocking, domain, and client statistics.
+
+```bash
+# All stats, top 10, all time
+curl -s http://localhost:18737/fps/stats | python3 -m json.tool
+
+# Top 5 over the last 24 hours
+curl -s 'http://localhost:18737/fps/stats?n=5&period=24h' | python3 -m json.tool
+```
+
+Returns connections, blocking stats (with top blocked domains), top requested domains, top clients by request count, and aggregate traffic totals.
+
+Query parameters: `n` (top-N size, default 10), `period` (`1h`, `24h`, `7d`, or omit for all time).
+
+Stats are persisted to `stats.db` via periodic flush (default 60s) and survive restarts. Disable with `stats.enabled: false` in config (returns 501).
 
 ## Logging
 
@@ -152,7 +172,8 @@ cmd/fpsd/           Daemon entrypoint (Cobra CLI)
 internal/config/    YAML config loading, validation, CLI merge
 internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
 internal/blocklist/ Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
-internal/probe/     Liveness/probe endpoint with block statistics
+internal/probe/     Management endpoints (heartbeat + stats)
+internal/stats/     In-memory counters and SQLite stats persistence
 internal/logging/   Structured logging with file rotation
 internal/version/   Build-time version info
 specs/              Project specifications
@@ -161,6 +182,21 @@ fpsd.yml            Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v0.5.0 — 2026-02-16
+
+- Database-backed statistics with SQLite persistence (`stats.db`)
+- `/fps/heartbeat` lightweight health check (replaces `/fps/probe`)
+- `/fps/stats` full statistics endpoint with connections, blocking, domains, clients, and traffic data
+- Top-N query support (`?n=25`) and time-bounded queries (`?period=24h`)
+- In-memory counters with delta-based periodic flush (default 60s, configurable)
+- Per-client byte tracking for HTTP and CONNECT requests
+- Final flush on graceful shutdown (no data loss)
+- Stats survive proxy restarts (merge DB + in-memory unflushed data)
+- `stats.enabled: false` disables collection; `/fps/stats` returns 501
+- Config: `stats.enabled` and `stats.flush_interval` settings
+- 16 new unit tests for stats collector, DB operations, flush logic, and merged queries
+- 77 total tests (all passing)
 
 ### v0.4.0 — 2026-02-16
 

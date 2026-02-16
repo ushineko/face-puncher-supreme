@@ -19,8 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/ushineko/face-puncher-supreme/internal/probe"
 )
 
 // Blocker checks whether a domain should be blocked.
@@ -35,9 +33,16 @@ type Server struct {
 	verbose          bool
 	startTime        time.Time
 	blocker          Blocker
-	blockDataFn      func() *probe.BlockData
 	connectTimeout   time.Duration
 	managementPrefix string
+
+	// Management endpoint handlers (set during construction).
+	heartbeatHandler http.HandlerFunc
+	statsHandler     http.HandlerFunc
+
+	// Stats callbacks.
+	onRequest     func(clientIP, domain string, blocked bool, bytesIn, bytesOut int64)
+	onTunnelClose func(clientIP string, bytesIn, bytesOut int64)
 
 	// Connection counters.
 	connectionsTotal  atomic.Int64
@@ -57,15 +62,22 @@ type Config struct {
 	Verbose bool
 	// Blocker checks domains against a blocklist. If nil, no blocking is performed.
 	Blocker Blocker
-	// BlockDataFn returns current block statistics for the probe endpoint.
-	// If nil, no block stats are reported.
-	BlockDataFn func() *probe.BlockData
 	// ConnectTimeout is the timeout for upstream TCP connections. Zero uses the default (10s).
 	ConnectTimeout time.Duration
 	// ReadHeaderTimeout is the timeout for reading client request headers. Zero uses the default (10s).
 	ReadHeaderTimeout time.Duration
 	// ManagementPrefix is the URL path prefix for management endpoints. Empty uses "/fps".
 	ManagementPrefix string
+	// HeartbeatHandler handles /fps/heartbeat requests. Required.
+	HeartbeatHandler http.HandlerFunc
+	// StatsHandler handles /fps/stats requests. Required.
+	StatsHandler http.HandlerFunc
+	// OnRequest is called after each request completes. Used to record stats.
+	// Parameters: clientIP, domain, blocked, bytesIn, bytesOut.
+	OnRequest func(clientIP, domain string, blocked bool, bytesIn, bytesOut int64)
+	// OnTunnelClose is called when a CONNECT tunnel closes with final byte counts.
+	// Parameters: clientIP, bytesIn, bytesOut.
+	OnTunnelClose func(clientIP string, bytesIn, bytesOut int64)
 }
 
 // New creates a new proxy server with the given configuration.
@@ -94,9 +106,12 @@ func New(cfg *Config) *Server {
 		verbose:          cfg.Verbose,
 		startTime:        time.Now(),
 		blocker:          cfg.Blocker,
-		blockDataFn:      cfg.BlockDataFn,
 		connectTimeout:   connectTimeout,
 		managementPrefix: mgmtPrefix,
+		heartbeatHandler: cfg.HeartbeatHandler,
+		statsHandler:     cfg.StatsHandler,
+		onRequest:        cfg.OnRequest,
+		onTunnelClose:    cfg.OnTunnelClose,
 	}
 
 	s.httpServer = &http.Server{
@@ -143,14 +158,20 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	domain := stripPort(r.URL.Host)
+	clientIP := stripPort(r.RemoteAddr)
+
 	// Check blocklist before forwarding.
-	if s.blocker != nil && s.blocker.IsBlocked(stripPort(r.URL.Host)) {
+	if s.blocker != nil && s.blocker.IsBlocked(domain) {
 		http.Error(w, "blocked by proxy", http.StatusForbidden)
 		s.logger.Info("blocked",
 			"method", r.Method,
 			"host", r.URL.Host,
 			"remote", r.RemoteAddr,
 		)
+		if s.onRequest != nil {
+			s.onRequest(clientIP, domain, true, 0, 0)
+		}
 		return
 	}
 
@@ -199,6 +220,15 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	duration := time.Since(start)
 
+	// Record stats for the completed request.
+	var reqBodySize int64
+	if r.ContentLength > 0 {
+		reqBodySize = r.ContentLength
+	}
+	if s.onRequest != nil {
+		s.onRequest(clientIP, domain, false, reqBodySize, written)
+	}
+
 	s.logger.Info("http",
 		"method", r.Method,
 		"url", r.URL.String(),
@@ -223,14 +253,20 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleConnect establishes a TCP tunnel for HTTPS CONNECT requests.
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	domain := stripPort(r.Host)
+	clientIP := stripPort(r.RemoteAddr)
+
 	// Check blocklist before establishing tunnel.
-	if s.blocker != nil && s.blocker.IsBlocked(stripPort(r.Host)) {
+	if s.blocker != nil && s.blocker.IsBlocked(domain) {
 		http.Error(w, "blocked by proxy", http.StatusForbidden)
 		s.logger.Info("blocked",
 			"method", "CONNECT",
 			"host", r.Host,
 			"remote", r.RemoteAddr,
 		)
+		if s.onRequest != nil {
+			s.onRequest(clientIP, domain, true, 0, 0)
+		}
 		return
 	}
 
@@ -274,12 +310,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Send 200 Connection Established to the client.
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")) //nolint:gosec // best-effort
 
+	// Record CONNECT as a request (bytes added later when tunnel closes).
+	if s.onRequest != nil {
+		s.onRequest(clientIP, domain, false, 0, 0)
+	}
+
 	s.logger.Info("connect",
 		"host", r.Host,
 		"remote", r.RemoteAddr,
 	)
 
-	// Bidirectional copy — track bytes for verbose logging.
+	// Bidirectional copy — always track bytes for stats.
 	var uploadBytes, downloadBytes atomic.Int64
 	go func() {
 		defer func() { _ = destConn.Close() }()
@@ -293,20 +334,21 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		n, _ := io.Copy(clientConn, destConn) //nolint:errcheck // tunnel streaming
 		downloadBytes.Store(n)
 
-		duration := time.Since(start)
-		if s.verbose {
-			s.logger.Debug("connect closed",
-				"host", r.Host,
-				"duration_ms", duration.Milliseconds(),
-				"upload_bytes", uploadBytes.Load(),
-				"download_bytes", downloadBytes.Load(),
-			)
-		} else {
-			s.logger.Debug("connect closed",
-				"host", r.Host,
-				"duration_ms", duration.Milliseconds(),
-			)
+		up := uploadBytes.Load()
+		down := downloadBytes.Load()
+
+		// Record tunnel byte counts.
+		if s.onTunnelClose != nil {
+			s.onTunnelClose(clientIP, up, down)
 		}
+
+		duration := time.Since(start)
+		s.logger.Debug("connect closed",
+			"host", r.Host,
+			"duration_ms", duration.Milliseconds(),
+			"upload_bytes", up,
+			"download_bytes", down,
+		)
 	}()
 }
 
@@ -341,6 +383,18 @@ func (s *Server) ConnectionsActive() int64 {
 // Uptime returns the duration since the server was created.
 func (s *Server) Uptime() time.Duration {
 	return time.Since(s.startTime)
+}
+
+// StartedAt returns the time the server was created.
+func (s *Server) StartedAt() time.Time {
+	return s.startTime
+}
+
+// SetHandlers replaces the management endpoint handlers after construction.
+// This allows creating the handlers with a reference to the Server itself.
+func (s *Server) SetHandlers(heartbeat, stats http.HandlerFunc) {
+	s.heartbeatHandler = heartbeat
+	s.statsHandler = stats
 }
 
 // hopByHopHeaders are headers that apply to a single transport-level

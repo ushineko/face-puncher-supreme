@@ -29,6 +29,7 @@ type Config struct {
 	BlocklistURLs []string   `yaml:"blocklist_urls"`
 	Timeouts      Timeouts   `yaml:"timeouts"`
 	Management    Management `yaml:"management"`
+	Stats         Stats      `yaml:"stats"`
 }
 
 // Timeouts holds proxy timeout configuration.
@@ -41,6 +42,12 @@ type Timeouts struct {
 // Management holds management endpoint configuration.
 type Management struct {
 	PathPrefix string `yaml:"path_prefix"`
+}
+
+// Stats holds statistics collection configuration.
+type Stats struct {
+	Enabled       bool     `yaml:"enabled"`
+	FlushInterval Duration `yaml:"flush_interval"`
 }
 
 // Default returns a Config populated with built-in defaults.
@@ -57,6 +64,10 @@ func Default() Config {
 		},
 		Management: Management{
 			PathPrefix: "/fps",
+		},
+		Stats: Stats{
+			Enabled:       true,
+			FlushInterval: Duration{60 * time.Second},
 		},
 	}
 }
@@ -157,6 +168,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Timeouts.ReadHeader.Duration <= 0 {
 		errs = append(errs, fmt.Sprintf("timeouts.read_header: must be positive, got %s", c.Timeouts.ReadHeader))
+	}
+
+	// Stats flush interval must be positive when enabled.
+	if c.Stats.Enabled && c.Stats.FlushInterval.Duration <= 0 {
+		errs = append(errs, fmt.Sprintf("stats.flush_interval: must be positive, got %s", c.Stats.FlushInterval))
 	}
 
 	// Management path prefix.

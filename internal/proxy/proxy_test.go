@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ushineko/face-puncher-supreme/internal/probe"
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
+	"github.com/ushineko/face-puncher-supreme/internal/stats"
 )
 
 // _startTestProxy starts a proxy server on a random port and returns
@@ -34,10 +35,23 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	collector := stats.NewCollector()
 	srv := proxy.New(&proxy.Config{
-		ListenAddr: addr,
-		Logger:     logger,
+		ListenAddr:       addr,
+		Logger:           logger,
+		HeartbeatHandler: http.NotFound,
+		StatsHandler:     http.NotFound,
+		OnRequest:        collector.RecordRequest,
+		OnTunnelClose:    collector.RecordBytes,
 	})
+	// Set real handlers now that srv exists.
+	srv.SetHandlers(
+		probe.HeartbeatHandler(srv, nil),
+		probe.StatsHandler(&probe.StatsProvider{
+			Info:      srv,
+			Collector: collector,
+		}),
+	)
 
 	go func() { _ = srv.ListenAndServe() }()
 
@@ -71,42 +85,46 @@ func _proxyClient(proxyURL string) *http.Client {
 	}
 }
 
-func TestProbeEndpoint(t *testing.T) {
+func TestHeartbeatEndpoint(t *testing.T) {
 	proxyURL, cleanup := _startTestProxy(t)
 	defer cleanup()
 
-	resp, err := http.Get(proxyURL + "/fps/probe")
+	resp, err := http.Get(proxyURL + "/fps/heartbeat")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 
-	var probeResp probe.Response
-	err = json.NewDecoder(resp.Body).Decode(&probeResp)
+	var hbResp probe.HeartbeatResponse
+	err = json.NewDecoder(resp.Body).Decode(&hbResp)
 	require.NoError(t, err)
 
-	assert.Equal(t, "ok", probeResp.Status)
-	assert.Equal(t, "face-puncher-supreme", probeResp.Service)
-	assert.Equal(t, "passthrough", probeResp.Mode)
-	assert.NotEmpty(t, probeResp.Version)
+	assert.Equal(t, "ok", hbResp.Status)
+	assert.Equal(t, "face-puncher-supreme", hbResp.Service)
+	assert.Equal(t, "passthrough", hbResp.Mode)
+	assert.NotEmpty(t, hbResp.Version)
+	assert.NotEmpty(t, hbResp.OS)
+	assert.NotEmpty(t, hbResp.Arch)
+	assert.NotEmpty(t, hbResp.GoVersion)
+	assert.NotEmpty(t, hbResp.StartedAt)
 }
 
-func TestProbeEndpointViaProxy(t *testing.T) {
+func TestHeartbeatEndpointViaProxy(t *testing.T) {
 	proxyURL, cleanup := _startTestProxy(t)
 	defer cleanup()
 
 	// When a client is configured to use the proxy, a request to the proxy's
-	// own host on /fps/probe should still work.
+	// own host on /fps/heartbeat should still work.
 	client := _proxyClient(proxyURL)
-	resp, err := client.Get(proxyURL + "/fps/probe")
+	resp, err := client.Get(proxyURL + "/fps/heartbeat")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var probeResp probe.Response
-	err = json.NewDecoder(resp.Body).Decode(&probeResp)
+	var hbResp probe.HeartbeatResponse
+	err = json.NewDecoder(resp.Body).Decode(&hbResp)
 	require.NoError(t, err)
-	assert.Equal(t, "ok", probeResp.Status)
+	assert.Equal(t, "ok", hbResp.Status)
 }
 
 func TestManagementUnknownPath(t *testing.T) {
@@ -282,7 +300,7 @@ func TestMalformedRequest(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestProbeConnectionCounters(t *testing.T) {
+func TestStatsConnectionCounters(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -299,18 +317,20 @@ func TestProbeConnectionCounters(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 
-	// Check probe counters.
-	resp, err := http.Get(proxyURL + "/fps/probe")
+	// Check stats counters.
+	resp, err := http.Get(proxyURL + "/fps/stats")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var probeResp probe.Response
-	err = json.NewDecoder(resp.Body).Decode(&probeResp)
+	var statsResp probe.StatsResponse
+	err = json.NewDecoder(resp.Body).Decode(&statsResp)
 	require.NoError(t, err)
 
-	// connections_total should be > 5 (5 proxied requests + this probe request + possibly earlier probes).
-	assert.GreaterOrEqual(t, probeResp.ConnectionsTotal, int64(5),
+	// connections.total should be > 5 (5 proxied requests + this stats request + possibly earlier requests).
+	assert.GreaterOrEqual(t, statsResp.Connections.Total, int64(5),
 		"should have counted at least the 5 proxied requests")
+	assert.GreaterOrEqual(t, statsResp.Traffic.TotalRequests, int64(5),
+		"should have recorded at least the 5 proxied requests in traffic")
 }
 
 func TestLargeResponse(t *testing.T) {
@@ -357,11 +377,23 @@ func _startTestProxyWithBlocker(t *testing.T, blocker proxy.Blocker) (proxyURL s
 	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	collector := stats.NewCollector()
 	srv := proxy.New(&proxy.Config{
-		ListenAddr: addr,
-		Logger:     logger,
-		Blocker:    blocker,
+		ListenAddr:       addr,
+		Logger:           logger,
+		Blocker:          blocker,
+		HeartbeatHandler: http.NotFound,
+		StatsHandler:     http.NotFound,
+		OnRequest:        collector.RecordRequest,
+		OnTunnelClose:    collector.RecordBytes,
 	})
+	srv.SetHandlers(
+		probe.HeartbeatHandler(srv, nil),
+		probe.StatsHandler(&probe.StatsProvider{
+			Info:      srv,
+			Collector: collector,
+		}),
+	)
 
 	go func() { _ = srv.ListenAndServe() }()
 
@@ -468,21 +500,19 @@ func TestCONNECTBlockedDomain(t *testing.T) {
 	assert.Error(t, err, "CONNECT to blocked domain should fail")
 }
 
-func TestProbeShowsPassthroughWithNoBlocker(t *testing.T) {
+func TestHeartbeatShowsPassthroughWithNoBlocker(t *testing.T) {
 	proxyURL, cleanup := _startTestProxy(t)
 	defer cleanup()
 
-	resp, err := http.Get(proxyURL + "/fps/probe")
+	resp, err := http.Get(proxyURL + "/fps/heartbeat")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var probeResp probe.Response
-	err = json.NewDecoder(resp.Body).Decode(&probeResp)
+	var hbResp probe.HeartbeatResponse
+	err = json.NewDecoder(resp.Body).Decode(&hbResp)
 	require.NoError(t, err)
 
-	assert.Equal(t, "passthrough", probeResp.Mode)
-	assert.Equal(t, int64(0), probeResp.BlocksTotal)
-	assert.Equal(t, 0, probeResp.BlocklistSize)
+	assert.Equal(t, "passthrough", hbResp.Mode)
 }
 
 func TestGracefulShutdown(t *testing.T) {
@@ -493,8 +523,10 @@ func TestGracefulShutdown(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := proxy.New(&proxy.Config{
-		ListenAddr: addr,
-		Logger:     logger,
+		ListenAddr:       addr,
+		Logger:           logger,
+		HeartbeatHandler: http.NotFound,
+		StatsHandler:     http.NotFound,
 	})
 
 	done := make(chan error, 1)

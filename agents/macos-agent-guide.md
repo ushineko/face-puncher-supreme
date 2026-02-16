@@ -10,20 +10,22 @@ This document is a communication channel between the Linux development environme
 
 | Field | Value |
 | ----- | ----- |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Binary | `fpsd` (Go, Linux amd64) |
 | Default listen | `:18737` |
 | Config file | `fpsd.yml` (auto-discovered in working directory) |
 | Mode | Domain blocking (Pi-hole compatible blocklists) |
 | Blocklist domains | ~376,000 (5 sources) |
-| Probe endpoint | `http://PROXY_HOST:PROXY_PORT/fps/probe` |
+| Heartbeat endpoint | `http://PROXY_HOST:PROXY_PORT/fps/heartbeat` |
+| Stats endpoint | `http://PROXY_HOST:PROXY_PORT/fps/stats` |
 
 ### Verified Working (Linux + Chromium 145)
 
 - HTTP forward proxy: passthrough for non-blocked domains
 - HTTPS CONNECT tunnel: passthrough for non-blocked domains
 - Domain blocking: 403 for blocked domains (both HTTP and CONNECT)
-- Probe endpoint: returns JSON with status, block stats, top blocked domains
+- Heartbeat endpoint: returns JSON with status, version, mode, uptime
+- Stats endpoint: returns JSON with connections, blocking, domains, clients, traffic
 - Tested: ~400 connections, ~317 blocked (78% block rate on ad-heavy sites)
 - Apple.com browsed successfully through proxy (no false positives)
 
@@ -115,15 +117,21 @@ Browsers installed:
 
 **When the Linux side provides a proxy address** (`PROXY_HOST:PROXY_PORT`):
 
-1. Verify the proxy is reachable by hitting the probe endpoint:
+1. Verify the proxy is reachable by hitting the heartbeat endpoint:
 
    ```bash
-   curl -s http://PROXY_HOST:PROXY_PORT/fps/probe | python3 -m json.tool
+   curl -s http://PROXY_HOST:PROXY_PORT/fps/heartbeat | python3 -m json.tool
    ```
 
-   Expected: JSON with `"status": "ok"`, `"mode": "blocking"`, and `"blocklist_size"` > 0. If `blocklist_size` is 0, the proxy started without blocklists — report this to the Linux side.
+   Expected: JSON with `"status": "ok"` and `"mode": "blocking"`.
 
-2. Note the `connections_total` and `blocks_total` values (baseline).
+2. Get baseline stats:
+
+   ```bash
+   curl -s http://PROXY_HOST:PROXY_PORT/fps/stats | python3 -m json.tool
+   ```
+
+   Note the `connections.total` and `blocking.blocks_total` values (baseline).
 
 3. Configure macOS to use the proxy:
 
@@ -150,13 +158,13 @@ Browsers installed:
 
 7. **Test 3: Apple.com** — Browse apple.com to verify no false positives (site should work normally).
 
-8. Check probe for block stats:
+8. Check stats for block data:
 
    ```bash
-   curl -s http://PROXY_HOST:PROXY_PORT/fps/probe | python3 -m json.tool
+   curl -s http://PROXY_HOST:PROXY_PORT/fps/stats | python3 -m json.tool
    ```
 
-   Report: new `connections_total`, `blocks_total`, `top_blocked` list. Compare with baseline from step 2.
+   Report: new `connections.total`, `blocking.blocks_total`, `blocking.top_blocked` list. Compare with baseline from step 2.
 
 9. Disable the proxy when done:
 
@@ -166,8 +174,8 @@ Browsers installed:
    ```
 
 10. Report findings in Results, specifically:
-    - Did Apple News traffic flow through the proxy? (connections_total should increase)
-    - Were any ad domains blocked? (blocks_total should increase)
+    - Did Apple News traffic flow through the proxy? (connections.total should increase)
+    - Were any ad domains blocked? (blocking.blocks_total should increase)
     - Did Apple News still function correctly with blocking active?
     - Were ads visibly reduced in Apple News?
     - Any broken functionality or errors?
@@ -183,10 +191,10 @@ Browsers installed:
 **When the Linux side provides a proxy address** (`PROXY_HOST:PROXY_PORT`):
 
 1. From the iOS device's browser, verify the proxy is reachable:
-   - Open Safari and navigate to `http://PROXY_HOST:PROXY_PORT/fps/probe`
-   - Expected: JSON with `"status": "ok"`, `"mode": "blocking"`, `"blocklist_size"` > 0.
+   - Open Safari and navigate to `http://PROXY_HOST:PROXY_PORT/fps/heartbeat`
+   - Expected: JSON with `"status": "ok"`, `"mode": "blocking"`.
 
-2. Note `connections_total` and `blocks_total` (baseline).
+2. Check `http://PROXY_HOST:PROXY_PORT/fps/stats` and note `connections.total` and `blocking.blocks_total` (baseline).
 
 3. Configure the iOS device to use the proxy:
    - Settings > Wi-Fi > (i) on connected network > Configure Proxy > Manual
@@ -194,7 +202,7 @@ Browsers installed:
 
 4. Run the same tests as Task 002 (Safari on news sites, Apple News browsing, apple.com).
 
-5. Check the probe again from Safari (`http://PROXY_HOST:PROXY_PORT/fps/probe`) and note the new `connections_total` and `blocks_total`.
+5. Check the stats again from Safari (`http://PROXY_HOST:PROXY_PORT/fps/stats`) and note the new `connections.total` and `blocking.blocks_total`.
 
 6. Disable the proxy on the iOS device:
    - Settings > Wi-Fi > (i) on connected network > Configure Proxy > Off
@@ -298,7 +306,7 @@ Browsers installed:
 2. On macOS, verify the proxy is reachable:
 
    ```bash
-   curl -s http://PROXY_HOST:PROXY_PORT/fps/probe | python3 -m json.tool
+   curl -s http://PROXY_HOST:PROXY_PORT/fps/heartbeat | python3 -m json.tool
    ```
 
 3. Configure the system proxy:
@@ -338,11 +346,11 @@ Browsers installed:
    diff ~/news_domains_baseline.txt ~/news_domains_proxy.txt
 
    # Check proxy stats
-   curl -s http://PROXY_HOST:PROXY_PORT/fps/probe | python3 -m json.tool
+   curl -s http://PROXY_HOST:PROXY_PORT/fps/stats | python3 -m json.tool
    ```
 
 2. Report findings in the Results section. Key questions:
-    - **Proxy obedience**: Did Apple News route any traffic through the system proxy? (Compare `connections_total` before and after the News session.)
+    - **Proxy obedience**: Did Apple News route any traffic through the system proxy? (Compare `connections.total` before and after the News session.)
     - **Direct connections**: Did News bypass the proxy for some or all connections? (Compare DNS logs — if News resolved the same domains in both runs, it may be ignoring the proxy.)
     - **Certificate pinning**: Did News fail to load content when the proxy was configured? (This would suggest it detects the proxy or pins certificates.)
     - **Domain inventory**: List all unique domains News contacted. Categorize as: content, ads/tracking, Apple infrastructure, CDN, other.
@@ -407,7 +415,7 @@ Findings:
 
 ## Notes
 
-- The proxy is built and verified on Linux with Chromium (v0.4.0). The macOS side needs to fill in environment info (Task 001) and then test with the proxy running on the Linux machine.
+- The proxy is built and verified on Linux with Chromium (v0.5.0). The macOS side needs to fill in environment info (Task 001) and then test with the proxy running on the Linux machine.
 - The proxy must bind to `0.0.0.0` (not localhost) for LAN access: `./fpsd --addr 0.0.0.0:18737`
 - Both machines must be on the same network. Check firewall rules if the probe endpoint isn't reachable.
 - Do NOT install custom CA certificates until explicitly instructed. Domain blocking works at the CONNECT level — we see the domain name and block before the TLS handshake, but cannot inspect encrypted content.

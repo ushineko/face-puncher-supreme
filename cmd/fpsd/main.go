@@ -26,6 +26,7 @@ import (
 	"github.com/ushineko/face-puncher-supreme/internal/logging"
 	"github.com/ushineko/face-puncher-supreme/internal/probe"
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
+	"github.com/ushineko/face-puncher-supreme/internal/stats"
 	"github.com/ushineko/face-puncher-supreme/internal/version"
 )
 
@@ -180,16 +181,59 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		blockDataFn = makeBlockDataFn(bl)
 	}
 
+	// Initialize stats collector (always active for in-memory counters).
+	collector := stats.NewCollector()
+
+	// Initialize stats DB if enabled.
+	var statsDB *stats.DB
+	if cfg.Stats.Enabled {
+		statsDBPath := filepath.Join(cfg.DataDir, "stats.db")
+		statsDB, err = stats.Open(statsDBPath, collector, logger, cfg.Stats.FlushInterval.Duration)
+		if err != nil {
+			return fmt.Errorf("open stats db: %w", err)
+		}
+		defer statsDB.Close() //nolint:errcheck // best-effort on shutdown (includes final flush)
+
+		logger.Info("stats database initialized",
+			"path", statsDBPath,
+			"flush_interval", cfg.Stats.FlushInterval.Duration,
+		)
+	}
+
+	// Create the proxy server with placeholder handlers (replaced after srv exists).
 	srv := proxy.New(&proxy.Config{
 		ListenAddr:        cfg.Listen,
 		Logger:            logger,
 		Verbose:           cfg.Verbose,
 		Blocker:           blocker,
-		BlockDataFn:       blockDataFn,
 		ConnectTimeout:    cfg.Timeouts.Connect.Duration,
 		ReadHeaderTimeout: cfg.Timeouts.ReadHeader.Duration,
 		ManagementPrefix:  cfg.Management.PathPrefix,
+		HeartbeatHandler:  http.NotFound, // placeholder
+		StatsHandler:      http.NotFound, // placeholder
+		OnRequest:         collector.RecordRequest,
+		OnTunnelClose:     collector.RecordBytes,
 	})
+
+	// Now build real handlers with the actual ServerInfo (srv).
+	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn)
+	var statsHandler http.HandlerFunc
+	if cfg.Stats.Enabled {
+		statsHandler = probe.StatsHandler(&probe.StatsProvider{
+			Info:      srv,
+			BlockFn:   blockDataFn,
+			StatsDB:   statsDB,
+			Collector: collector,
+		})
+	} else {
+		statsHandler = probe.StatsDisabledHandler()
+	}
+	srv.SetHandlers(heartbeatHandler, statsHandler)
+
+	// Start stats flush loop.
+	if statsDB != nil {
+		statsDB.Start()
+	}
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -203,6 +247,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 			"verbose", cfg.Verbose,
 			"blocklist_domains", bl.Size(),
 			"blocklist_sources", bl.SourceCount(),
+			"stats_enabled", cfg.Stats.Enabled,
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", "error", err)
@@ -219,6 +264,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown error: %w", err)
 	}
+
+	// Stats DB close (with final flush) happens via defer above.
 
 	logger.Info("proxy stopped")
 	return nil
@@ -285,19 +332,13 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// makeBlockDataFn creates a callback that gathers block stats from the DB.
+// makeBlockDataFn creates a callback that gathers block stats from the blocklist.
 func makeBlockDataFn(bl *blocklist.DB) func() *probe.BlockData {
 	return func() *probe.BlockData {
-		top := bl.TopBlocked(10)
-		entries := make([]probe.TopEntry, len(top))
-		for i, e := range top {
-			entries[i] = probe.TopEntry{Domain: e.Domain, Count: e.Count}
-		}
 		return &probe.BlockData{
 			Total:   bl.BlocksTotal(),
 			Size:    bl.Size(),
 			Sources: bl.SourceCount(),
-			Top:     entries,
 		}
 	}
 }

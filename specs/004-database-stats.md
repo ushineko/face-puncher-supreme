@@ -1,6 +1,6 @@
 # Spec 004: Database-Backed Statistics
 
-**Status**: DRAFT
+**Status**: COMPLETE
 **Created**: 2026-02-16
 **Depends on**: Spec 001 (proxy foundation), Spec 002 (domain blocklist)
 
@@ -228,24 +228,24 @@ stats:
 
 ## Acceptance Criteria
 
-- [ ] `stats.db` created in `data_dir` on startup (when `stats.enabled` is true)
-- [ ] In-memory counters flush to SQLite on configured interval (default 60s)
-- [ ] Final flush on graceful shutdown (no data loss)
-- [ ] `/fps/heartbeat` returns lightweight health check with OS info, uptime, version, started_at
-- [ ] `/fps/heartbeat` involves no database queries or sorting
-- [ ] `/fps/stats` returns full statistics: connections, blocking, domains, clients, traffic
-- [ ] `/fps/stats` `top_blocked` shows top N blocked domains by count
-- [ ] `/fps/stats` `top_requested` shows top N requested domains (all traffic)
-- [ ] `/fps/stats` `top_by_requests` shows top N clients with request/blocked/bytes breakdown
-- [ ] `/fps/stats?n=N` controls the size of all top-N lists
-- [ ] `/fps/stats?period=24h` returns time-bounded results from hourly rollups
-- [ ] `/fps/probe` removed; references in codebase and macOS agent guide updated
-- [ ] Stats survive proxy restarts (read from DB on startup, merge with current session)
-- [ ] Per-client byte tracking works for both HTTP and CONNECT requests
-- [ ] `stats.enabled: false` disables stats collection; `/fps/stats` returns 501
-- [ ] `traffic_hourly` table enables historical trend queries
-- [ ] All existing tests pass (no regression)
-- [ ] New unit tests for: stats DB operations, flush logic, top-N queries, period filtering, heartbeat response, stats response
+- [x] `stats.db` created in `data_dir` on startup (when `stats.enabled` is true)
+- [x] In-memory counters flush to SQLite on configured interval (default 60s)
+- [x] Final flush on graceful shutdown (no data loss)
+- [x] `/fps/heartbeat` returns lightweight health check with OS info, uptime, version, started_at
+- [x] `/fps/heartbeat` involves no database queries or sorting
+- [x] `/fps/stats` returns full statistics: connections, blocking, domains, clients, traffic
+- [x] `/fps/stats` `top_blocked` shows top N blocked domains by count
+- [x] `/fps/stats` `top_requested` shows top N requested domains (all traffic)
+- [x] `/fps/stats` `top_by_requests` shows top N clients with request/blocked/bytes breakdown
+- [x] `/fps/stats?n=N` controls the size of all top-N lists
+- [x] `/fps/stats?period=24h` returns time-bounded results from hourly rollups
+- [x] `/fps/probe` removed; references in codebase and macOS agent guide updated
+- [x] Stats survive proxy restarts (read from DB on startup, merge with current session)
+- [x] Per-client byte tracking works for both HTTP and CONNECT requests
+- [x] `stats.enabled: false` disables stats collection; `/fps/stats` returns 501
+- [x] `traffic_hourly` table enables historical trend queries
+- [x] All existing tests pass (no regression)
+- [x] New unit tests for: stats DB operations, flush logic, top-N queries, period filtering, heartbeat response, stats response
 
 ## Out of Scope
 
