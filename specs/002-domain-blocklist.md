@@ -1,6 +1,6 @@
 # Spec 002: Domain-Based Ad Blocking
 
-**Status**: DRAFT
+**Status**: COMPLETE
 **Created**: 2026-02-16
 **Depends on**: Spec 001 (proxy foundation)
 
@@ -132,23 +132,23 @@ No new endpoints needed. The existing `/fps/probe` endpoint gains the block stat
 
 ## Acceptance Criteria
 
-- [ ] `--blocklist-url` flags configure blocklist sources
-- [ ] First run with URLs downloads lists and builds `blocklist.db`
-- [ ] `fpsd update-blocklist` re-downloads and rebuilds the DB
-- [ ] Subsequent runs load from existing DB without re-downloading
-- [ ] Hosts format (`0.0.0.0 domain`) parsed correctly
-- [ ] Adblock/domain-only format (`||domain^` or bare `domain`) parsed correctly
-- [ ] CONNECT requests to blocked domains return 403
-- [ ] HTTP requests to blocked domains return 403
-- [ ] Non-blocked requests pass through unchanged (no regression)
-- [ ] Block counter increments on each blocked request
-- [ ] `/fps/probe` shows `blocks_total`, `blocklist_size`, `blocklist_sources`, and `top_blocked`
-- [ ] `/fps/probe` mode is `"blocking"` when domains loaded, `"passthrough"` when not
-- [ ] Matching is case-insensitive
-- [ ] Comments and blank lines in list files are ignored
-- [ ] Startup log shows number of domains loaded and sources configured
-- [ ] All existing tests pass (no regression)
-- [ ] New unit tests for DB operations, parser, and blocking behavior
+- [x] `--blocklist-url` flags configure blocklist sources
+- [x] First run with URLs downloads lists and builds `blocklist.db`
+- [x] `fpsd update-blocklist` re-downloads and rebuilds the DB
+- [x] Subsequent runs load from existing DB without re-downloading
+- [x] Hosts format (`0.0.0.0 domain`) parsed correctly
+- [x] Adblock/domain-only format (`||domain^` or bare `domain`) parsed correctly
+- [x] CONNECT requests to blocked domains return 403
+- [x] HTTP requests to blocked domains return 403
+- [x] Non-blocked requests pass through unchanged (no regression)
+- [x] Block counter increments on each blocked request
+- [x] `/fps/probe` shows `blocks_total`, `blocklist_size`, `blocklist_sources`, and `top_blocked`
+- [x] `/fps/probe` mode is `"blocking"` when domains loaded, `"passthrough"` when not
+- [x] Matching is case-insensitive
+- [x] Comments and blank lines in list files are ignored
+- [x] Startup log shows number of domains loaded and sources configured
+- [x] All existing tests pass (no regression)
+- [x] New unit tests for DB operations, parser, and blocking behavior
 - [ ] Verified with real browser: ad domains blocked, normal browsing works
 
 ## Out of Scope

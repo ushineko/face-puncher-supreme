@@ -15,17 +15,27 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ushineko/face-puncher-supreme/internal/probe"
 )
+
+// Blocker checks whether a domain should be blocked.
+type Blocker interface {
+	IsBlocked(domain string) bool
+}
 
 // Server is an HTTP/HTTPS forward proxy.
 type Server struct {
-	httpServer *http.Server
-	logger     *slog.Logger
-	verbose    bool
-	startTime  time.Time
+	httpServer  *http.Server
+	logger      *slog.Logger
+	verbose     bool
+	startTime   time.Time
+	blocker     Blocker
+	blockDataFn func() *probe.BlockData
 
 	// Connection counters.
 	connectionsTotal  atomic.Int64
@@ -43,6 +53,11 @@ type Config struct {
 	Logger *slog.Logger
 	// Verbose enables detailed request/response logging (headers, sizes, timing).
 	Verbose bool
+	// Blocker checks domains against a blocklist. If nil, no blocking is performed.
+	Blocker Blocker
+	// BlockDataFn returns current block statistics for the probe endpoint.
+	// If nil, no block stats are reported.
+	BlockDataFn func() *probe.BlockData
 }
 
 // New creates a new proxy server with the given configuration.
@@ -52,9 +67,11 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		logger:    cfg.Logger,
-		verbose:   cfg.Verbose,
-		startTime: time.Now(),
+		logger:      cfg.Logger,
+		verbose:     cfg.Verbose,
+		startTime:   time.Now(),
+		blocker:     cfg.Blocker,
+		blockDataFn: cfg.BlockDataFn,
 	}
 
 	mux := http.NewServeMux()
@@ -98,6 +115,17 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("bad request: missing host",
 			"method", r.Method,
 			"url", r.URL.String(),
+			"remote", r.RemoteAddr,
+		)
+		return
+	}
+
+	// Check blocklist before forwarding.
+	if s.blocker != nil && s.blocker.IsBlocked(stripPort(r.URL.Host)) {
+		http.Error(w, "blocked by proxy", http.StatusForbidden)
+		s.logger.Info("blocked",
+			"method", r.Method,
+			"host", r.URL.Host,
 			"remote", r.RemoteAddr,
 		)
 		return
@@ -172,6 +200,17 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleConnect establishes a TCP tunnel for HTTPS CONNECT requests.
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	// Check blocklist before establishing tunnel.
+	if s.blocker != nil && s.blocker.IsBlocked(stripPort(r.Host)) {
+		http.Error(w, "blocked by proxy", http.StatusForbidden)
+		s.logger.Info("blocked",
+			"method", "CONNECT",
+			"host", r.Host,
+			"remote", r.RemoteAddr,
+		)
+		return
+	}
+
 	start := time.Now()
 
 	if s.verbose {
@@ -310,4 +349,13 @@ func flattenHeaders(h http.Header) []string {
 		}
 	}
 	return out
+}
+
+// stripPort removes the port from a host:port string.
+// If there is no port, the host is returned as-is.
+func stripPort(hostport string) string {
+	if idx := strings.LastIndex(hostport, ":"); idx >= 0 {
+		return hostport[:idx]
+	}
+	return hostport
 }

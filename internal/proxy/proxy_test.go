@@ -338,6 +338,153 @@ func TestLargeResponse(t *testing.T) {
 	assert.Len(t, body, 1024*1024, "full 1MB body should be relayed")
 }
 
+// _mockBlocker is a simple blocker for testing that blocks a fixed set of domains.
+type _mockBlocker struct {
+	blocked map[string]bool
+}
+
+func (m *_mockBlocker) IsBlocked(domain string) bool {
+	return m.blocked[strings.ToLower(domain)]
+}
+
+// _startTestProxyWithBlocker starts a proxy with a blocker configured.
+func _startTestProxyWithBlocker(t *testing.T, blocker proxy.Blocker) (proxyURL string, cleanup func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	_ = listener.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := proxy.New(proxy.Config{
+		ListenAddr: addr,
+		Logger:     logger,
+		Blocker:    blocker,
+	})
+
+	go func() { _ = srv.ListenAndServe() }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, dialErr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return "http://" + addr, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
+}
+
+func TestHTTPBlockedDomain(t *testing.T) {
+	// Create a test upstream that should never be reached.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached for blocked domains")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	// Parse upstream URL to get the host.
+	upstreamURL, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+
+	blocker := &_mockBlocker{blocked: map[string]bool{
+		upstreamURL.Hostname(): true,
+	}}
+
+	proxyURL, cleanup := _startTestProxyWithBlocker(t, blocker)
+	defer cleanup()
+
+	client := _proxyClient(proxyURL)
+	resp, err := client.Get(upstream.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestHTTPAllowedDomain(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "allowed")
+	}))
+	defer upstream.Close()
+
+	// Blocker that blocks a different domain, not the upstream.
+	blocker := &_mockBlocker{blocked: map[string]bool{
+		"blocked.example.com": true,
+	}}
+
+	proxyURL, cleanup := _startTestProxyWithBlocker(t, blocker)
+	defer cleanup()
+
+	client := _proxyClient(proxyURL)
+	resp, err := client.Get(upstream.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "allowed", string(body))
+}
+
+func TestCONNECTBlockedDomain(t *testing.T) {
+	// Create an HTTPS upstream that should never be reached.
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached for blocked domains")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+
+	blocker := &_mockBlocker{blocked: map[string]bool{
+		upstreamURL.Hostname(): true,
+	}}
+
+	proxyURL, cleanup := _startTestProxyWithBlocker(t, blocker)
+	defer cleanup()
+
+	client := _proxyClient(proxyURL)
+	// Override TLS config to trust test server cert.
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	upstreamTransport, ok := upstream.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport.TLSClientConfig = upstreamTransport.TLSClientConfig
+
+	// CONNECT to a blocked domain should fail. The HTTP client will get an error
+	// because the proxy returns 403 instead of establishing the tunnel.
+	_, err = client.Get(upstream.URL)
+	assert.Error(t, err, "CONNECT to blocked domain should fail")
+}
+
+func TestProbeShowsPassthroughWithNoBlocker(t *testing.T) {
+	proxyURL, cleanup := _startTestProxy(t)
+	defer cleanup()
+
+	resp, err := http.Get(proxyURL + "/fps/probe")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var probeResp probe.Response
+	err = json.NewDecoder(resp.Body).Decode(&probeResp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "passthrough", probeResp.Mode)
+	assert.Equal(t, int64(0), probeResp.BlocksTotal)
+	assert.Equal(t, 0, probeResp.BlocklistSize)
+}
+
 func TestGracefulShutdown(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

@@ -7,6 +7,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Build](#build)
 - [Run](#run)
 - [CLI Flags](#cli-flags)
+- [Domain Blocking](#domain-blocking)
 - [Probe Endpoint](#probe-endpoint)
 - [Logging](#logging)
 - [Test](#test)
@@ -25,8 +26,13 @@ Produces the `fpsd` binary in the project root with version info baked in via ld
 ## Run
 
 ```bash
-# Default: listen on :8080, logs to ./logs/
+# Default: listen on :8080, logs to ./logs/, passthrough mode
 ./fpsd
+
+# With domain blocking (Pi-hole blocklists)
+./fpsd \
+  --blocklist-url https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts \
+  --blocklist-url https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
 
 # Custom address with verbose logging
 ./fpsd --addr 0.0.0.0:9090 --verbose
@@ -45,10 +51,33 @@ chromium --proxy-server="http://127.0.0.1:8080"
 | `--addr` | `-a` | `:8080` | Listen address (host:port) |
 | `--log-dir` | | `logs` | Directory for log files (empty to disable) |
 | `--verbose` | `-v` | `false` | Enable DEBUG-level logging with full request/response detail |
+| `--blocklist-url` | | | Blocklist URL (repeatable, same format as Pi-hole adlists) |
+| `--data-dir` | | `.` | Directory for `blocklist.db` |
 
 Subcommands:
 
 - `fpsd version` — Print version string and exit
+- `fpsd update-blocklist` — Re-download all blocklist URLs, rebuild the database, and exit
+
+## Domain Blocking
+
+The proxy blocks requests to domains on known ad/tracking blocklists. This complements DNS-based blocking (Pi-hole) at the proxy layer.
+
+```bash
+# First run: downloads lists and builds blocklist.db
+./fpsd --blocklist-url https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+
+# Subsequent runs: loads from existing blocklist.db (no re-download)
+./fpsd --blocklist-url https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+
+# Update lists without starting the proxy
+fpsd update-blocklist \
+  --blocklist-url https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+```
+
+Supported list formats: hosts (`0.0.0.0 domain`), adblock (`||domain^`), and domain-only. Matching is exact and case-insensitive. Blocked requests receive `403 Forbidden`.
+
+With no `--blocklist-url` flags, the proxy runs in passthrough mode (no blocking).
 
 ## Probe Endpoint
 
@@ -58,7 +87,7 @@ Verify the proxy is running:
 curl -s http://localhost:8080/fps/probe | python3 -m json.tool
 ```
 
-Returns JSON with status, version, mode, uptime, and connection counters.
+Returns JSON with status, version, mode, uptime, connection counters, and block statistics (`blocks_total`, `blocklist_size`, `blocklist_sources`, `top_blocked`).
 
 ## Logging
 
@@ -92,8 +121,9 @@ Uses golangci-lint v2 with a versioned binary (auto-installed on first run). Con
 
 ```
 cmd/fpsd/           Daemon entrypoint (Cobra CLI)
-internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel)
-internal/probe/     Liveness/probe endpoint
+internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
+internal/blocklist/ Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
+internal/probe/     Liveness/probe endpoint with block statistics
 internal/logging/   Structured logging with file rotation
 internal/version/   Build-time version info
 specs/              Project specifications
@@ -101,6 +131,16 @@ agents/             Cross-system testing guides
 ```
 
 ## Changelog
+
+### v0.3.0 — 2026-02-16
+
+- Domain-based ad blocking via `--blocklist-url` flags (Pi-hole compatible)
+- SQLite-backed blocklist with in-memory cache for O(1) domain lookup
+- Hosts format (`0.0.0.0 domain`), adblock format (`||domain^`), and domain-only parsing
+- `fpsd update-blocklist` subcommand to re-download and rebuild the database
+- Block statistics in `/fps/probe`: `blocks_total`, `blocklist_size`, `blocklist_sources`, `top_blocked`
+- Probe mode switches between `"passthrough"` and `"blocking"` based on loaded domains
+- 40 unit tests + 5 integration tests
 
 ### v0.2.0 — 2026-02-16
 

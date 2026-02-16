@@ -1,7 +1,7 @@
 .PHONY: build test lint coverage clean setup install-lint
 
 BINARY := fpsd
-VERSION := 0.2.0
+VERSION := 0.3.0
 COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/ushineko/face-puncher-supreme/internal/version

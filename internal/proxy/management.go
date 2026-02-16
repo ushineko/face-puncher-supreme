@@ -11,7 +11,7 @@ import (
 func (s *Server) handleManagement(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/fps/probe":
-		probe.Handler(s)(w, r)
+		probe.Handler(s, s.blockDataFn)(w, r)
 	default:
 		http.NotFound(w, r)
 	}
