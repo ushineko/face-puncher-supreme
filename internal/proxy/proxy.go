@@ -30,12 +30,14 @@ type Blocker interface {
 
 // Server is an HTTP/HTTPS forward proxy.
 type Server struct {
-	httpServer  *http.Server
-	logger      *slog.Logger
-	verbose     bool
-	startTime   time.Time
-	blocker     Blocker
-	blockDataFn func() *probe.BlockData
+	httpServer       *http.Server
+	logger           *slog.Logger
+	verbose          bool
+	startTime        time.Time
+	blocker          Blocker
+	blockDataFn      func() *probe.BlockData
+	connectTimeout   time.Duration
+	managementPrefix string
 
 	// Connection counters.
 	connectionsTotal  atomic.Int64
@@ -58,29 +60,49 @@ type Config struct {
 	// BlockDataFn returns current block statistics for the probe endpoint.
 	// If nil, no block stats are reported.
 	BlockDataFn func() *probe.BlockData
+	// ConnectTimeout is the timeout for upstream TCP connections. Zero uses the default (10s).
+	ConnectTimeout time.Duration
+	// ReadHeaderTimeout is the timeout for reading client request headers. Zero uses the default (10s).
+	ReadHeaderTimeout time.Duration
+	// ManagementPrefix is the URL path prefix for management endpoints. Empty uses "/fps".
+	ManagementPrefix string
 }
 
 // New creates a new proxy server with the given configuration.
-func New(cfg Config) *Server {
+func New(cfg *Config) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
 
-	s := &Server{
-		logger:      cfg.Logger,
-		verbose:     cfg.Verbose,
-		startTime:   time.Now(),
-		blocker:     cfg.Blocker,
-		blockDataFn: cfg.BlockDataFn,
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/fps/", s.handleManagement)
+	readHeaderTimeout := cfg.ReadHeaderTimeout
+	if readHeaderTimeout <= 0 {
+		readHeaderTimeout = 10 * time.Second
+	}
+
+	mgmtPrefix := cfg.ManagementPrefix
+	if mgmtPrefix == "" {
+		mgmtPrefix = "/fps"
+	}
+
+	s := &Server{
+		logger:           cfg.Logger,
+		verbose:          cfg.Verbose,
+		startTime:        time.Now(),
+		blocker:          cfg.Blocker,
+		blockDataFn:      cfg.BlockDataFn,
+		connectTimeout:   connectTimeout,
+		managementPrefix: mgmtPrefix,
+	}
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           s, // Server itself implements http.Handler
-		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           s,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	return s
@@ -94,7 +116,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.connectionsActive.Add(-1)
 
 	// Management endpoints are handled directly regardless of request method.
-	if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/fps/" {
+	prefix := s.managementPrefix + "/"
+	if strings.HasPrefix(r.URL.Path, prefix) {
 		s.handleManagement(w, r)
 		return
 	}
@@ -222,7 +245,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	destConn, err := net.DialTimeout("tcp", r.Host, s.connectTimeout)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel error: %v", err), http.StatusBadGateway)
 		s.logger.Error("connect tunnel failed",

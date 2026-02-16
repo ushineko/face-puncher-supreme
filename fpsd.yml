@@ -1,0 +1,35 @@
+# fpsd.yml — Face Puncher Supreme configuration
+#
+# All values below are the defaults. Uncomment and modify as needed.
+# CLI flags override config file values when both are specified.
+
+# Network — listen address in host:port format.
+# Use "0.0.0.0:8080" to accept connections from other devices on the LAN.
+listen: ":8080"
+
+# Logging — directory for rotated log files. Set to "" to disable file logging.
+log_dir: "logs"
+
+# Verbose — enable DEBUG-level logging (full headers, byte counts, timing).
+verbose: false
+
+# Data directory — where blocklist.db (and future stats.db) are stored.
+data_dir: "."
+
+# Blocklist URLs — Pi-hole compatible blocklists. Comment out any you don't want.
+blocklist_urls:
+  - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+  - https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-social/hosts
+  - https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
+  - https://urlhaus.abuse.ch/downloads/hostfile/
+  - https://big.oisd.nl/
+
+# Timeouts — Go duration strings (e.g., "5s", "1m", "2m30s").
+timeouts:
+  shutdown: "5s"       # graceful shutdown deadline
+  connect: "10s"       # upstream TCP dial timeout
+  read_header: "10s"   # client request header read timeout
+
+# Management endpoints.
+management:
+  path_prefix: "/fps"  # URL prefix for management endpoints

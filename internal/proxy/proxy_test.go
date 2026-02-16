@@ -34,7 +34,7 @@ func _startTestProxy(t *testing.T) (proxyURL string, cleanup func()) {
 	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := proxy.New(proxy.Config{
+	srv := proxy.New(&proxy.Config{
 		ListenAddr: addr,
 		Logger:     logger,
 	})
@@ -357,7 +357,7 @@ func _startTestProxyWithBlocker(t *testing.T, blocker proxy.Blocker) (proxyURL s
 	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := proxy.New(proxy.Config{
+	srv := proxy.New(&proxy.Config{
 		ListenAddr: addr,
 		Logger:     logger,
 		Blocker:    blocker,
@@ -492,7 +492,7 @@ func TestGracefulShutdown(t *testing.T) {
 	_ = listener.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := proxy.New(proxy.Config{
+	srv := proxy.New(&proxy.Config{
 		ListenAddr: addr,
 		Logger:     logger,
 	})
