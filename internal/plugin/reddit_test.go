@@ -17,7 +17,7 @@ import (
 // loadFixture reads a test fixture from testdata/.
 func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	data, err := os.ReadFile(filepath.Join("testdata", "reddit", name))
 	require.NoError(t, err, "fixture %q not found", name)
 	return data
 }
