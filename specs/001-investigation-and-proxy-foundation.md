@@ -1,6 +1,6 @@
 # Spec 001: Investigation and Proxy Foundation
 
-**Status**: DRAFT
+**Status**: COMPLETE
 **Created**: 2026-02-15
 
 ## Problem Statement
@@ -9,37 +9,50 @@ Ad blocking via DNS (e.g., Pi-hole) is ineffective for apps like Apple News wher
 
 ## Research Findings: Apple Apps and Proxy Feasibility
 
-### Certificate Pinning - The Core Constraint
+### Certificate Pinning — Pre-Testing Research
 
 Apple first-party apps use **certificate pinning** for their own service connections. Apple's enterprise documentation explicitly states:
 
 > "Apple services will fail any connection that uses HTTPS Interception (SSL Inspection). Attempts to perform content inspection on encrypted communications between Apple devices and services will result in a dropped connection."
 > -- [Apple Support (101555)](https://support.apple.com/en-us/101555)
 
-This means a standard MITM proxy with a custom CA installed on the device **will not work** for intercepting Apple News API calls. The app will reject the proxy's certificate regardless of trust store configuration.
+This led to the initial assumption that a MITM proxy would not work for Apple News API calls.
 
-### Where Interception CAN Work
+### Live Testing Results (2026-02-16)
 
-| Target | Pinning? | Proxy Interception? | Notes |
-|--------|----------|---------------------|-------|
-| Safari browsing | No | Yes | Respects custom CAs for user-browsed sites |
-| Third-party apps (standard NSURLSession) | Varies | Usually yes | Most third-party apps accept trusted custom CAs |
-| WKWebView content inside apps | No | Potentially yes | WKWebView does NOT enforce NSPinnedDomains |
-| Apple News API calls | Yes | No | Certificate pinning rejects non-Apple certs |
-| App Store, iCloud, etc. | Yes | No | Same blanket Apple service pinning |
+**Phase 1.5 testing on macOS 26.3, Apple News 11.3, M1 Max MacBook Pro. See `agents/macos-agent-guide.md` for full trace data.**
 
-### The WKWebView Angle (Unconfirmed)
+The reality is more nuanced than the research predicted. Apple News splits its traffic into two categories with different proxy behavior:
 
-Apple News renders article content - likely using `WKWebView`. Web views do NOT enforce certificate pinning for the content they load. If ads within Apple News are loaded as web content (HTML/JS/images) inside a web view, those specific requests **might** be interceptable even when the app's API calls are not.
+| Traffic Type | Domains | Proxy Behavior | Protocol |
+|-------------|---------|----------------|----------|
+| Ad SDK | `news.iadsdk.apple.com` | Routes through system proxy | HTTPS via CONNECT |
+| Telemetry | `news-events.apple.com`, `news-app-events.apple.com` | Routes through system proxy | HTTPS via CONNECT |
+| Content/API | `c.apple.news`, `news-assets.apple.com`, `gateway.icloud.com` | Bypasses proxy (QUIC/HTTP3) | UDP-based QUIC |
+| Infrastructure | `news-edge.apple.com`, `bag.itunes.apple.com`, `fpinit.itunes.apple.com` | Bypasses proxy | QUIC |
+| Safari browsing | All domains | Routes through system proxy | HTTPS via CONNECT |
 
-**This is unconfirmed and needs hands-on testing** (see Phase 1.5 below).
+**Key finding**: Domain-level blocking of `news.iadsdk.apple.com` suppresses Apple News ads. User confirmed: "News seems to not be showing ads anymore." News continued to function normally with ads removed — no crashes, no content loading failures.
 
-### Conclusion
+**DNS behavior**: Apple News uses encrypted DNS (DoH/DoT). Zero DNS queries on port 53 for News domains during the baseline capture. This confirms Pi-hole-style DNS blocking cannot reach these connections.
 
-- **Direct Apple News HTTPS interception: not viable** for API-level traffic
-- **Safari and third-party apps: fully viable** as proxy targets
-- **WKWebView-rendered ad content in Apple News: plausible but unproven**
-- **A content-aware proxy is still a useful tool** for Safari, third-party apps, and potentially for the web view portions of Apple apps
+### Where the Research Was Wrong
+
+The pre-testing research assumed certificate pinning would prevent **all** proxy interaction with Apple News. In practice:
+
+- **Content traffic** does bypass the proxy — it uses QUIC (HTTP/3, UDP-based), which a TCP HTTP CONNECT proxy cannot intercept regardless of pinning
+- **Ad SDK and telemetry traffic** respects the system HTTP proxy and routes through it as standard HTTPS CONNECT tunnels — domain-level blocking works
+- **HTTPS content inspection (MITM) is not needed** for the primary use case. The ad SDK uses a separate domain from content, so domain-level blocking is sufficient
+- **The WKWebView hypothesis was irrelevant** — ads come through the iAd SDK domain, not via web view content loading
+
+### Revised Conclusion
+
+- **Apple News ad blocking via domain proxy: viable and confirmed working**
+- **The critical domain is `news.iadsdk.apple.com`** (Apple's iAd SDK)
+- **HTTPS content inspection: not needed** for News ad suppression
+- **DNS-level blocking: not viable** for News (encrypted DNS bypasses Pi-hole)
+- **Safari through proxy: works, but Pi-hole blocklists are too aggressive** (93.7% block rate causes page breakage — see spec 002 notes)
+- **Proxy approach validated** — this project addresses a gap that DNS blocking cannot fill
 
 ---
 
@@ -110,16 +123,16 @@ Before investing in HTTPS inspection, confirm what traffic from Apple devices ac
 **Methodology**: This phase uses the macOS agent guide (`agents/macos-agent-guide.md`) to coordinate testing between the Linux dev environment (proxy server) and a real macOS/iOS system. The Linux side writes tasks, the macOS Claude executes them on a live system, and results are recorded in the guide. No assumptions about Apple app behavior are made without live system confirmation.
 
 **Acceptance Criteria**:
-- [ ] macOS agent guide Task 001 completed (environment discovery)
-- [ ] Proxy server (Phase 1) accessible from macOS system on LAN
-- [ ] macOS agent guide Task 002 completed (Apple News traffic analysis via proxy)
-- [ ] macOS agent guide Task 003 completed if iOS devices are available
-- [ ] Traffic logs from the proxy analyzed and categorized:
-  - Safari browsing (expected: all traffic visible)
-  - Apple News usage (what domains/paths appear vs. what bypasses)
-  - Third-party app traffic
-- [ ] Findings written up based on actual observed traffic (not web research)
-- [ ] Decision gate: based on live findings, determine if proceeding to HTTPS inspection is worthwhile for the Apple News use case, or if the project should pivot to Safari/third-party apps
+- [x] macOS agent guide Task 001 completed (environment discovery)
+- [x] Proxy server (Phase 1) accessible from macOS system on LAN
+- [x] macOS agent guide Task 002 completed (Apple News traffic analysis via proxy)
+- [x] macOS agent guide Task 003 — SKIPPED, no iOS device connected during testing
+- [x] Traffic logs from the proxy analyzed and categorized:
+  - Safari browsing: all traffic routes through proxy; Pi-hole lists cause over-blocking
+  - Apple News: ad SDK and telemetry route through proxy; content uses QUIC, bypasses proxy
+  - Third-party app traffic: not tested (only Safari and News tested)
+- [x] Findings written up based on actual observed traffic (not web research)
+- [x] Decision gate: **HTTPS inspection not needed.** Domain-level blocking of `news.iadsdk.apple.com` suppresses News ads. Project proceeds with targeted blocklist refinement (see spec 005).
 
 **This phase is live system testing + documentation, coordinated via `agents/macos-agent-guide.md`.**
 
@@ -172,9 +185,15 @@ These are noted for context but are NOT part of this spec:
 - Automatic proxy configuration (PAC file serving)
 - Certificate pinning bypass research (jailbreak-dependent)
 
-## Open Questions
+## Open Questions (Resolved)
 
-1. **WKWebView hypothesis**: Does Apple News actually load ad content via web views? Web research suggests this is plausible but **unconfirmed**. Phase 1.5 live testing via the macOS agent guide will answer this definitively.
-2. **Scope narrowing**: If Apple News proves completely opaque to proxying, should the project pivot to focus on Safari + third-party app ad blocking (which is confirmed feasible)?
-3. **Transparent proxy vs. configured proxy**: Transparent proxying (via iptables/nftables) avoids per-device configuration but adds complexity. When should we introduce this?
-4. **Research vs. reality**: The certificate pinning findings above are from web research and enterprise documentation. Until we observe actual traffic from a live Apple device through our proxy (Phase 1.5), these are informed assumptions, not confirmed facts. The macOS agent guide (`agents/macos-agent-guide.md`) is the mechanism for getting ground truth.
+1. **WKWebView hypothesis**: RESOLVED — irrelevant. Ads are delivered via the iAd SDK (`news.iadsdk.apple.com`), not via web view content. Domain-level blocking is sufficient.
+2. **Scope narrowing**: RESOLVED — no pivot needed. Apple News ad blocking works via the proxy. The project continues on its original path.
+3. **Transparent proxy vs. configured proxy**: Still open. macOS testing revealed a practical friction point — the proxy must be configured on the correct network interface (the Mac was on USB Ethernet, not Wi-Fi). Transparent proxying would eliminate this class of issue.
+4. **Research vs. reality**: RESOLVED — live testing completed. See "Live Testing Results" section above. The research was partially wrong: Apple News does route ad/telemetry traffic through the system proxy, despite certificate pinning on content traffic.
+
+## Open Questions (New)
+
+1. **Blocklist tuning**: Pi-hole lists (376K domains) cause Safari breakage. The project needs an allowlist mechanism or more selective blocklists for general browser use (see spec 005).
+2. **iOS testing**: Not yet tested. Task 003 was skipped due to no device. iOS Apple News may behave differently from macOS regarding proxy obedience.
+3. **QUIC blocking**: Apple News content uses QUIC (HTTP/3, UDP). If future phases need to inspect content traffic, QUIC would need to be blocked to force fallback to TCP HTTPS. This is out of scope for now since domain-level ad blocking is sufficient.

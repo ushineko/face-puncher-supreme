@@ -39,9 +39,17 @@ type DB struct {
 	mu      sync.RWMutex
 	domains map[string]struct{}
 
+	// Allowlist — config-only, no persistence.
+	exactAllow  map[string]struct{} // exact-match allowlist (lowercased)
+	suffixAllow []string            // suffix patterns (lowercased, without "*." prefix)
+
 	// Block statistics.
 	blocksTotal atomic.Int64
 	blockCounts sync.Map // domain -> *atomic.Int64
+
+	// Allow statistics (domains that matched blocklist but were saved by allowlist).
+	allowsTotal atomic.Int64
+	allowCounts sync.Map // domain -> *atomic.Int64
 
 	sourceCount int
 }
@@ -78,24 +86,49 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
-// IsBlocked returns true if the domain (case-insensitive) is in the blocklist.
-// It also increments block counters.
+// IsBlocked returns true if the domain (case-insensitive) is in the blocklist
+// and not in the allowlist. If the domain matches both the blocklist and
+// allowlist, the allowlist wins and allow counters are incremented.
 func (db *DB) IsBlocked(domain string) bool {
 	domain = strings.ToLower(domain)
 
 	db.mu.RLock()
-	_, blocked := db.domains[domain]
+	_, inBlocklist := db.domains[domain]
 	db.mu.RUnlock()
 
-	if blocked {
-		db.blocksTotal.Add(1)
-		val, _ := db.blockCounts.LoadOrStore(domain, &atomic.Int64{})
+	if !inBlocklist {
+		return false
+	}
+
+	// Check allowlist — allowlist wins over blocklist.
+	if db.isAllowed(domain) {
+		db.allowsTotal.Add(1)
+		val, _ := db.allowCounts.LoadOrStore(domain, &atomic.Int64{})
 		if counter, ok := val.(*atomic.Int64); ok {
 			counter.Add(1)
 		}
+		return false
 	}
 
-	return blocked
+	db.blocksTotal.Add(1)
+	val, _ := db.blockCounts.LoadOrStore(domain, &atomic.Int64{})
+	if counter, ok := val.(*atomic.Int64); ok {
+		counter.Add(1)
+	}
+	return true
+}
+
+// isAllowed checks whether a domain matches the allowlist (exact or suffix).
+func (db *DB) isAllowed(domain string) bool {
+	if _, ok := db.exactAllow[domain]; ok {
+		return true
+	}
+	for _, suffix := range db.suffixAllow {
+		if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // BlocksTotal returns the total number of blocked requests since startup.
@@ -147,6 +180,104 @@ func (db *DB) TopBlocked(n int) []BlockedEntry {
 	}
 
 	return entries
+}
+
+// SetAllowlist configures the allowlist from config entries. Each entry
+// is either an exact domain ("example.com") or a suffix pattern ("*.example.com").
+// This replaces any existing allowlist and should be called once at startup.
+func (db *DB) SetAllowlist(entries []string) {
+	exact := make(map[string]struct{}, len(entries))
+	var suffixes []string
+
+	for _, entry := range entries {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "" {
+			continue
+		}
+		if strings.HasPrefix(entry, "*.") {
+			suffixes = append(suffixes, entry[2:])
+		} else {
+			exact[entry] = struct{}{}
+		}
+	}
+
+	db.exactAllow = exact
+	db.suffixAllow = suffixes
+}
+
+// AddInlineDomains merges inline blocklist domains (from config) into the
+// in-memory cache. These are not stored in SQLite and survive across
+// update-blocklist runs (they come from config, not from downloaded URLs).
+func (db *DB) AddInlineDomains(domains []string) {
+	if len(domains) == 0 {
+		return
+	}
+
+	db.mu.Lock()
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" {
+			db.domains[d] = struct{}{}
+		}
+	}
+	db.mu.Unlock()
+}
+
+// AllowsTotal returns the total number of allowed requests since startup.
+func (db *DB) AllowsTotal() int64 {
+	return db.allowsTotal.Load()
+}
+
+// AllowlistSize returns the number of allowlist entries (exact + suffix).
+func (db *DB) AllowlistSize() int {
+	return len(db.exactAllow) + len(db.suffixAllow)
+}
+
+// TopAllowed returns the top n allowed domains by count.
+func (db *DB) TopAllowed(n int) []BlockedEntry {
+	var entries []BlockedEntry
+
+	db.allowCounts.Range(func(key, value any) bool {
+		domain, ok := key.(string)
+		if !ok {
+			return true
+		}
+		counter, ok := value.(*atomic.Int64)
+		if !ok {
+			return true
+		}
+		entries = append(entries, BlockedEntry{
+			Domain: domain,
+			Count:  counter.Load(),
+		})
+		return true
+	})
+
+	// Sort descending by count.
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j].Count > entries[j-1].Count; j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
+
+	if len(entries) > n {
+		entries = entries[:n]
+	}
+
+	return entries
+}
+
+// SnapshotAllowCounts returns a snapshot of per-domain allow counts
+// for stats persistence. The returned map is domain -> count.
+func (db *DB) SnapshotAllowCounts() map[string]int64 {
+	result := make(map[string]int64)
+	db.allowCounts.Range(func(key, value any) bool {
+		domain, _ := key.(string)         //nolint:errcheck // type is guaranteed by LoadOrStore
+		counter, _ := value.(*atomic.Int64) //nolint:errcheck // type is guaranteed by LoadOrStore
+		result[domain] = counter.Load()
+		return true
+	})
+	return result
 }
 
 // Update downloads blocklists from the given URLs, parses them, and

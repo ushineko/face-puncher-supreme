@@ -167,16 +167,25 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Load allowlist from config (must be set before AddInlineDomains so
+	// allowlist takes priority in IsBlocked checks).
+	bl.SetAllowlist(cfg.Allowlist)
+
+	// Merge inline blocklist entries from config into in-memory map.
+	bl.AddInlineDomains(cfg.Blocklist)
+
 	logger.Info("blocklist loaded",
 		"domains", bl.Size(),
 		"sources", bl.SourceCount(),
+		"inline_domains", len(cfg.Blocklist),
+		"allowlist_entries", bl.AllowlistSize(),
 		"db_path", dbPath,
 	)
 
 	var blocker proxy.Blocker
 	var blockDataFn func() *probe.BlockData
 
-	if bl.Size() > 0 {
+	if bl.Size() > 0 || bl.AllowlistSize() > 0 {
 		blocker = bl
 		blockDataFn = makeBlockDataFn(bl)
 	}
@@ -193,6 +202,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("open stats db: %w", err)
 		}
 		defer statsDB.Close() //nolint:errcheck // best-effort on shutdown (includes final flush)
+
+		statsDB.SetAllowStatsSource(bl.SnapshotAllowCounts)
 
 		logger.Info("stats database initialized",
 			"path", statsDBPath,
@@ -247,6 +258,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 			"verbose", cfg.Verbose,
 			"blocklist_domains", bl.Size(),
 			"blocklist_sources", bl.SourceCount(),
+			"inline_blocklist", len(cfg.Blocklist),
+			"allowlist_entries", bl.AllowlistSize(),
 			"stats_enabled", cfg.Stats.Enabled,
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -336,9 +349,11 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 func makeBlockDataFn(bl *blocklist.DB) func() *probe.BlockData {
 	return func() *probe.BlockData {
 		return &probe.BlockData{
-			Total:   bl.BlocksTotal(),
-			Size:    bl.Size(),
-			Sources: bl.SourceCount(),
+			Total:         bl.BlocksTotal(),
+			AllowsTotal:   bl.AllowsTotal(),
+			Size:          bl.Size(),
+			AllowlistSize: bl.AllowlistSize(),
+			Sources:       bl.SourceCount(),
 		}
 	}
 }

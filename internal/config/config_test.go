@@ -19,6 +19,8 @@ func TestDefault(t *testing.T) {
 	assert.False(t, cfg.Verbose)
 	assert.Equal(t, ".", cfg.DataDir)
 	assert.Empty(t, cfg.BlocklistURLs)
+	assert.Empty(t, cfg.Blocklist)
+	assert.Empty(t, cfg.Allowlist)
 	assert.Equal(t, 5*time.Second, cfg.Timeouts.Shutdown.Duration)
 	assert.Equal(t, 10*time.Second, cfg.Timeouts.Connect.Duration)
 	assert.Equal(t, 10*time.Second, cfg.Timeouts.ReadHeader.Duration)
@@ -273,6 +275,65 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "listen:")
 	assert.Contains(t, err.Error(), "timeouts.shutdown:")
 	assert.Contains(t, err.Error(), "path_prefix:")
+}
+
+func TestLoad_BlocklistAndAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "test.yml")
+	content := `
+blocklist:
+  - news.iadsdk.apple.com
+  - news-events.apple.com
+allowlist:
+  - registry.api.cnn.io
+  - "*.optimizely.com"
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
+
+	cfg, _, err := Load(cfgPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"news.iadsdk.apple.com", "news-events.apple.com"}, cfg.Blocklist)
+	assert.Equal(t, []string{"registry.api.cnn.io", "*.optimizely.com"}, cfg.Allowlist)
+}
+
+func TestValidate_ValidBlocklistAndAllowlist(t *testing.T) {
+	cfg := Default()
+	cfg.Blocklist = []string{"ad.example.com", "tracker.example.org"}
+	cfg.Allowlist = []string{"safe.example.com", "*.cnn.io"}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_InvalidBlocklistEntry(t *testing.T) {
+	cfg := Default()
+	cfg.Blocklist = []string{"*.wildcard.com"}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "blocklist[0]")
+}
+
+func TestValidate_InvalidBlocklistEmpty(t *testing.T) {
+	cfg := Default()
+	cfg.Blocklist = []string{""}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "blocklist[0]")
+}
+
+func TestValidate_InvalidAllowlistSuffix(t *testing.T) {
+	cfg := Default()
+	cfg.Allowlist = []string{"*."}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "allowlist[0]")
+}
+
+func TestValidate_InvalidAllowlistMidWildcard(t *testing.T) {
+	cfg := Default()
+	cfg.Allowlist = []string{"foo.*.com"}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "wildcard must be prefix")
 }
 
 func TestDump(t *testing.T) {

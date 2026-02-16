@@ -270,3 +270,200 @@ func TestDBHostStripPort(t *testing.T) {
 	// IsBlocked takes just the domain, not host:port. The caller strips the port.
 	assert.True(t, db.IsBlocked("ad.example.com"))
 }
+
+// --- Allowlist tests ---
+
+func TestAllowlistExactMatch(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{"ad.example.com", "safe.example.com", "tracker.org"}, nil
+	}))
+	require.NoError(t, err)
+
+	db.SetAllowlist([]string{"safe.example.com"})
+
+	assert.True(t, db.IsBlocked("ad.example.com"))
+	assert.False(t, db.IsBlocked("safe.example.com")) // allowlisted
+	assert.True(t, db.IsBlocked("tracker.org"))
+}
+
+func TestAllowlistSuffixMatch(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{
+			"registry.api.cnn.io",
+			"cdn.cnn.io",
+			"cnn.io",
+			"ad.example.com",
+		}, nil
+	}))
+	require.NoError(t, err)
+
+	db.SetAllowlist([]string{"*.cnn.io"})
+
+	assert.False(t, db.IsBlocked("registry.api.cnn.io")) // suffix match
+	assert.False(t, db.IsBlocked("cdn.cnn.io"))           // suffix match
+	assert.False(t, db.IsBlocked("cnn.io"))               // base domain match
+	assert.True(t, db.IsBlocked("ad.example.com"))         // not allowlisted
+}
+
+func TestAllowlistCaseInsensitive(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{"safe.example.com"}, nil
+	}))
+	require.NoError(t, err)
+
+	db.SetAllowlist([]string{"SAFE.Example.COM"})
+
+	assert.False(t, db.IsBlocked("safe.example.com"))
+	assert.False(t, db.IsBlocked("SAFE.EXAMPLE.COM"))
+}
+
+func TestAllowlistCounters(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{"safe.example.com", "ad.example.com"}, nil
+	}))
+	require.NoError(t, err)
+
+	db.SetAllowlist([]string{"safe.example.com"})
+
+	// Trigger allows and blocks.
+	db.IsBlocked("safe.example.com") // allowed
+	db.IsBlocked("safe.example.com") // allowed
+	db.IsBlocked("safe.example.com") // allowed
+	db.IsBlocked("ad.example.com")   // blocked
+
+	assert.Equal(t, int64(3), db.AllowsTotal())
+	assert.Equal(t, int64(1), db.BlocksTotal())
+
+	top := db.TopAllowed(10)
+	require.Len(t, top, 1)
+	assert.Equal(t, "safe.example.com", top[0].Domain)
+	assert.Equal(t, int64(3), top[0].Count)
+}
+
+func TestAllowlistSize(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	db.SetAllowlist([]string{"exact1.com", "exact2.com", "*.suffix.com"})
+	assert.Equal(t, 3, db.AllowlistSize())
+
+	db.SetAllowlist(nil)
+	assert.Equal(t, 0, db.AllowlistSize())
+}
+
+func TestAllowlistNotInBlocklist(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	// Domain is in allowlist but not in blocklist — should not be blocked
+	// and should NOT increment allow counters.
+	db.SetAllowlist([]string{"safe.example.com"})
+
+	assert.False(t, db.IsBlocked("safe.example.com"))
+	assert.Equal(t, int64(0), db.AllowsTotal()) // no counter increment
+}
+
+func TestSnapshotAllowCounts(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{"a.com", "b.com"}, nil
+	}))
+	require.NoError(t, err)
+
+	db.SetAllowlist([]string{"a.com", "b.com"})
+
+	db.IsBlocked("a.com") // allowed
+	db.IsBlocked("a.com") // allowed
+	db.IsBlocked("b.com") // allowed
+
+	snap := db.SnapshotAllowCounts()
+	assert.Equal(t, int64(2), snap["a.com"])
+	assert.Equal(t, int64(1), snap["b.com"])
+}
+
+// --- Inline blocklist tests ---
+
+func TestAddInlineDomains(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	db.AddInlineDomains([]string{"news.iadsdk.apple.com", "news-events.apple.com"})
+
+	assert.Equal(t, 2, db.Size())
+	assert.True(t, db.IsBlocked("news.iadsdk.apple.com"))
+	assert.True(t, db.IsBlocked("news-events.apple.com"))
+	assert.False(t, db.IsBlocked("safe.example.com"))
+}
+
+func TestAddInlineDomainsWithURLDomains(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	// Load from URL source.
+	err = db.Update([]string{"http://list"}, blocklist.FetchFunc(func(url string) ([]string, error) {
+		return []string{"ad.example.com"}, nil
+	}))
+	require.NoError(t, err)
+
+	// Add inline domains — these merge with URL-sourced domains.
+	db.AddInlineDomains([]string{"news.iadsdk.apple.com"})
+
+	assert.Equal(t, 2, db.Size())
+	assert.True(t, db.IsBlocked("ad.example.com"))
+	assert.True(t, db.IsBlocked("news.iadsdk.apple.com"))
+}
+
+func TestAddInlineDomainsCaseInsensitive(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	db.AddInlineDomains([]string{"NEWS.iAdsdk.Apple.COM"})
+
+	assert.True(t, db.IsBlocked("news.iadsdk.apple.com"))
+}
+
+func TestAddInlineDomainsEmpty(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	db.AddInlineDomains(nil)
+	db.AddInlineDomains([]string{})
+	assert.Equal(t, 0, db.Size())
+}
+
+func TestInlineDomainsWithAllowlist(t *testing.T) {
+	db, err := blocklist.Open(":memory:", discardLogger)
+	require.NoError(t, err)
+	defer db.Close() //nolint:errcheck // test cleanup
+
+	db.AddInlineDomains([]string{"ad.example.com", "safe.example.com"})
+	db.SetAllowlist([]string{"safe.example.com"})
+
+	assert.True(t, db.IsBlocked("ad.example.com"))
+	assert.False(t, db.IsBlocked("safe.example.com")) // allowlist wins
+}

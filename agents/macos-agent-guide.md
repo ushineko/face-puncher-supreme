@@ -72,116 +72,84 @@ Current proxy config: None active (all proxies disabled)
 
 ## Current Tasks
 
-### Task 001: Environment Discovery
+### Task 005: Allowlist Verification (Post Spec 005)
 
-**Status**: COMPLETE
+**Status**: PENDING (waiting for spec 005 implementation on Linux side)
 **Priority**: High
-**Context**: We're building a content-aware ad-blocking proxy (Go, running on Linux). Before investing in HTTPS inspection, we need to understand what Apple devices actually send through a configured HTTP proxy.
+**Context**: macOS testing revealed that Pi-hole blocklists cause over-blocking in Safari (93.7% block rate, broken pages). Spec 005 adds an allowlist mechanism to the proxy. This task verifies the allowlist works on macOS.
+
+**Prerequisites**: Spec 005 must be implemented and the proxy restarted on the Linux side with allowlist entries configured.
 
 **Instructions**:
 
-1. Fill in the System Info section above.
-
-2. Check what proxy-related tools are available:
-
-   ```bash
-   which mitmproxy
-   which charles
-   which proxyman
-   # check if any proxy tools are installed
-   brew list | grep -i proxy
-   ```
-
-3. Report current network proxy configuration:
-
-   ```bash
-   networksetup -getwebproxy Wi-Fi
-   networksetup -getsecurewebproxy Wi-Fi
-   networksetup -listallnetworkservices
-   scutil --proxy
-   ```
-
-4. Check if there's an existing custom CA in the keychain:
-
-   ```bash
-   security find-certificate -a -c "mitmproxy" /Library/Keychains/System.keychain 2>/dev/null
-   security find-certificate -a -c "Charles" /Library/Keychains/System.keychain 2>/dev/null
-   ```
-
-5. Report findings in the Results section below.
-
----
-
-### Task 002: Apple News Traffic Analysis (Passive + Blocking)
-
-**Status**: COMPLETE
-**Priority**: High
-**Context**: The proxy is built and verified working on Linux with Chromium. We now need to test it with macOS and Apple devices to see (a) whether Apple News traffic flows through the proxy, and (b) whether domain blocking affects ad delivery. The proxy is running and reachable at `njv-cachyos.local:18737`.
-
-**Proxy address**: `njv-cachyos.local:18737`
-
-1. Verify the proxy is reachable by hitting the heartbeat endpoint:
+1. Verify the proxy is reachable and check the version:
 
    ```bash
    curl -s http://njv-cachyos.local:18737/fps/heartbeat | python3 -m json.tool
    ```
 
-   Expected: JSON with `"status": "ok"` and `"mode": "blocking"`.
-
-2. Get baseline stats:
+2. Identify the active network interface before configuring the proxy:
 
    ```bash
-   curl -s http://njv-cachyos.local:18737/fps/stats | python3 -m json.tool
+   # IMPORTANT: must configure proxy on the ACTIVE interface
+   # Check which interface has an IP and default route
+   networksetup -listallnetworkservices
+   route -n get default 2>/dev/null | grep interface
+   ifconfig en0 | grep "inet "    # Wi-Fi
+   ifconfig en6 | grep "inet "    # USB Ethernet (if present)
    ```
 
-   Note the `connections.total` and `blocking.blocks_total` values (baseline).
-
-3. Configure macOS to use the proxy:
+3. Configure the proxy on the **active** interface (substitute the correct interface name):
 
    ```bash
+   # If Wi-Fi is active:
    networksetup -setwebproxy Wi-Fi njv-cachyos.local 18737
    networksetup -setsecurewebproxy Wi-Fi njv-cachyos.local 18737
+
+   # If USB Ethernet is active (replace with actual service name):
+   # networksetup -setwebproxy "USB 10/100/1000 LAN" njv-cachyos.local 18737
+   # networksetup -setsecurewebproxy "USB 10/100/1000 LAN" njv-cachyos.local 18737
    ```
 
-4. Verify proxy is working:
+4. Verify with `scutil` that proxy settings are actually active:
 
    ```bash
-   curl -s --proxy http://njv-cachyos.local:18737 http://example.com -o /dev/null -w '%{http_code}'
+   scutil --proxy
+   # Must show HTTPEnable: 1 and HTTPSEnable: 1 with the proxy host/port
    ```
 
-   Expected: `200`. This confirms traffic is routing through the proxy.
+5. **Test 1: Apple News** — Browse for 2-3 minutes. Confirm ads are still suppressed (should be identical to Task 002 results since `news.iadsdk.apple.com` is not allowlisted).
 
-5. **Test 1: Safari on ad-heavy sites** — Browse 2-3 news sites (CNN, BBC, etc.) for 2 minutes. Note whether ads are visibly reduced compared to direct browsing.
+6. **Test 2: Safari on previously broken sites** — Browse the sites that broke in Task 002:
+   - CNN (was broken due to `registry.api.cnn.io` being blocked)
+   - Any other news site that had missing content
+   - Note whether the allowlist fixed the breakage
 
-6. **Test 2: Apple News** — Browse for 2-3 minutes. Interact with:
-   - The Today feed
-   - At least 3 full articles
-   - Any visible ads (note their appearance — are they reduced? unchanged?)
-   - The News+ tab if available
+7. **Test 3: General Safari browsing** — Browse 5-6 sites (mix of news, social, shopping) for 5 minutes. Note any remaining breakage.
 
-7. **Test 3: Apple.com** — Browse apple.com to verify no false positives (site should work normally).
-
-8. Check stats for block data:
+8. Check stats:
 
    ```bash
    curl -s http://njv-cachyos.local:18737/fps/stats | python3 -m json.tool
    ```
 
-   Report: new `connections.total`, `blocking.blocks_total`, `blocking.top_blocked` list. Compare with baseline from step 2.
+   Report: block rate (should be lower than 93.7%), any remaining false positives.
 
-9. Disable the proxy when done:
+9. Disable the proxy:
 
    ```bash
    networksetup -setwebproxystate Wi-Fi off
    networksetup -setsecurewebproxystate Wi-Fi off
+   # Or for USB Ethernet:
+   # networksetup -setwebproxystate "USB 10/100/1000 LAN" off
+   # networksetup -setsecurewebproxystate "USB 10/100/1000 LAN" off
    ```
 
-10. Report findings in Results, specifically:
-    - Did Apple News traffic flow through the proxy? (connections.total should increase)
-    - Were any ad domains blocked? (blocking.blocks_total should increase)
-    - Did Apple News still function correctly with blocking active?
-    - Were ads visibly reduced in Apple News?
-    - Any broken functionality or errors?
+10. Report findings in Results. Key questions:
+    - Are Apple News ads still blocked?
+    - Did the allowlist fix Safari breakage on CNN and other affected sites?
+    - What is the new block rate? Is it more reasonable for general browsing?
+    - Any remaining false positives to add to the allowlist?
 
 ---
 
@@ -189,7 +157,7 @@ Current proxy config: None active (all proxies disabled)
 
 **Status**: BLOCKED (no iOS device connected)
 **Priority**: Medium
-**Context**: If iOS devices are available, we want to test Apple News on iOS through the proxy. This is the primary target — Apple News ads on iOS are the whole reason for the project. The proxy is running and reachable at `njv-cachyos.local:18737`.
+**Context**: If iOS devices are available, we want to test Apple News on iOS through the proxy. iOS Apple News may behave differently from macOS regarding proxy obedience. The proxy is running and reachable at `njv-cachyos.local:18737`.
 
 1. From the iOS device's browser, verify the proxy is reachable:
    - Open Safari and navigate to `http://njv-cachyos.local:18737/fps/heartbeat`
@@ -201,7 +169,7 @@ Current proxy config: None active (all proxies disabled)
    - Settings > Wi-Fi > (i) on connected network > Configure Proxy > Manual
    - Server: `njv-cachyos.local`, Port: `18737`
 
-4. Run the same tests as Task 002 (Safari on news sites, Apple News browsing, apple.com).
+4. Run the same tests as Task 005 (Apple News, Safari on news sites, general browsing).
 
 5. Check the stats again from Safari (`http://njv-cachyos.local:18737/fps/stats`) and note the new `connections.total` and `blocking.blocks_total`.
 
@@ -216,310 +184,80 @@ Current proxy config: None active (all proxies disabled)
 
 ---
 
-### Task 004: Apple News Internal Behavior Investigation (Tracing)
-
-**Status**: COMPLETE (can run independently of Tasks 002/003)
-**Priority**: High
-**Context**: Before investing further in proxy-based ad blocking, we need to understand how Apple News actually behaves internally on macOS. Does it use the system HTTP proxy? Does it pin certificates? Does it use a custom transport? What domains does it contact and for what purpose? This task uses macOS tracing tools to answer these questions by capturing real network activity while a user interacts with the app.
-
-**Goal**: Capture a detailed trace of Apple News network behavior during normal use. The user will generate activity (browsing feeds, reading articles, encountering ads), and the trace will show exactly what connections News makes, to which hosts, using which protocols. This tells us whether the proxy approach is feasible for macOS before we invest in HTTPS inspection.
-
-**Instructions**:
-
-#### Part A: Capture with no proxy configured (baseline)
-
-1. Ensure no proxy is configured on macOS:
-
-   ```bash
-   networksetup -setwebproxystate Wi-Fi off
-   networksetup -setsecurewebproxystate Wi-Fi off
-   scutil --proxy  # confirm all proxies are off
-   ```
-
-2. Close Apple News completely (force quit if needed):
-
-   ```bash
-   killall News 2>/dev/null
-   ```
-
-3. Start a network trace using `nettop` in a terminal. This captures per-process network activity:
-
-   ```bash
-   # Run nettop filtered to the News process, log to file
-   # -P = show only processes with network activity
-   # -J bytes_in,bytes_out = columns to show
-   # -t wifi = filter to Wi-Fi interface
-   nettop -P -J bytes_in,bytes_out -t wifi -n -l 1 > ~/news_nettop_baseline.txt 2>&1 &
-   NETTOP_PID=$!
-   echo "nettop running as PID $NETTOP_PID"
-   ```
-
-4. In a separate terminal, start a DNS query log:
-
-   ```bash
-   sudo tcpdump -i any -n port 53 -l 2>/dev/null | tee ~/news_dns_baseline.txt &
-   TCPDUMP_PID=$!
-   echo "tcpdump running as PID $TCPDUMP_PID"
-   ```
-
-5. In a third terminal, capture the unified log for News network activity:
-
-   ```bash
-   log stream --predicate '(process == "News" || process == "nsurlsessiond") && (category == "networking" || category == "default")' --style compact > ~/news_log_baseline.txt 2>&1 &
-   LOG_PID=$!
-   echo "log stream running as PID $LOG_PID"
-   ```
-
-6. **User activity** — Open Apple News and use it normally for 5 minutes:
-   - Scroll through the Today feed
-   - Open and read at least 5 full articles (mix of free and News+ if available)
-   - Note any ads you see (banner, interstitial, inline) and where they appear
-   - Visit the Following tab
-   - Search for a topic and open a result
-   - Return to the Today feed and scroll more
-
-7. Stop all captures:
-
-   ```bash
-   kill $NETTOP_PID $TCPDUMP_PID $LOG_PID 2>/dev/null
-   sudo killall tcpdump 2>/dev/null
-   ```
-
-8. Extract the domains News contacted:
-
-   ```bash
-   # From DNS log — domains resolved during the session
-   grep -oP '(?<=A\? )\S+' ~/news_dns_baseline.txt | sort -u > ~/news_domains_baseline.txt
-
-   # Count total unique domains
-   wc -l ~/news_domains_baseline.txt
-   ```
-
-#### Part B: Capture with system proxy configured
-
-1. The proxy is already running on the Linux side at `njv-cachyos.local:18737`.
-
-2. On macOS, verify the proxy is reachable:
-
-   ```bash
-   curl -s http://njv-cachyos.local:18737/fps/heartbeat | python3 -m json.tool
-   ```
-
-3. Configure the system proxy:
-
-   ```bash
-   networksetup -setwebproxy Wi-Fi njv-cachyos.local 18737
-   networksetup -setsecurewebproxy Wi-Fi njv-cachyos.local 18737
-   ```
-
-4. Force quit and relaunch Apple News:
-
-   ```bash
-   killall News 2>/dev/null
-   sleep 2
-   open -a News
-   ```
-
-5. Repeat the same nettop + DNS + log stream captures (Part A steps 3-5), saving to `*_proxy.txt` filenames instead.
-
-6. Repeat the same user activity (Part A step 6) for 5 minutes.
-
-7. Stop captures and disable the proxy:
-
-   ```bash
-   kill $NETTOP_PID $TCPDUMP_PID $LOG_PID 2>/dev/null
-   sudo killall tcpdump 2>/dev/null
-   networksetup -setwebproxystate Wi-Fi off
-   networksetup -setsecurewebproxystate Wi-Fi off
-   ```
-
-#### Part C: Analysis
-
-1. Compare the two captures and report:
-
-   ```bash
-   # Domains contacted without proxy vs with proxy
-   diff ~/news_domains_baseline.txt ~/news_domains_proxy.txt
-
-   # Check proxy stats
-   curl -s http://njv-cachyos.local:18737/fps/stats | python3 -m json.tool
-   ```
-
-2. Report findings in the Results section. Key questions:
-    - **Proxy obedience**: Did Apple News route any traffic through the system proxy? (Compare `connections.total` before and after the News session.)
-    - **Direct connections**: Did News bypass the proxy for some or all connections? (Compare DNS logs — if News resolved the same domains in both runs, it may be ignoring the proxy.)
-    - **Certificate pinning**: Did News fail to load content when the proxy was configured? (This would suggest it detects the proxy or pins certificates.)
-    - **Domain inventory**: List all unique domains News contacted. Categorize as: content, ads/tracking, Apple infrastructure, CDN, other.
-    - **Protocol breakdown**: What protocols did News use? (HTTP/1.1, HTTP/2, HTTP/3/QUIC, custom?)
-    - **Ad delivery pattern**: Are ads served from the same domains as content, or from distinct ad-serving domains?
-    - **Feasibility assessment**: Based on the trace, is domain-level proxy blocking viable for News ads? Would HTTPS content inspection be needed? Or does News bypass the proxy entirely?
-
-#### Optional: Instruments Network Profiler
-
-If Xcode is installed, an Instruments trace provides deeper insight:
-
-```bash
-# Check if Instruments is available
-which instruments || xcrun xctrace list devices
-```
-
-If available, consider running a Network profiler trace on the News process. This shows HTTP request/response pairs, connection reuse, and protocol details that nettop and tcpdump cannot capture. Document the steps taken and attach or describe the Instruments output.
-
----
-
 ## Results
 
-### Result for Task 001
-
-```text
-Status: COMPLETE
-Date: 2026-02-16
-
-Findings:
-- macOS 26.3 on M1 Max MacBook Pro (32 GB)
-- Connected via Wi-Fi on 192.168.86.27
-- Apple News 11.3 installed (system app)
-- Safari is the only browser installed
-- No proxy tools installed (no mitmproxy, Charles, Proxyman)
-- No custom CA certificates in System keychain
-- No proxies currently configured (clean baseline)
-- Proxy at njv-cachyos.local:18737 is reachable — heartbeat confirmed (v0.5.0, mode: blocking)
-- No iOS devices currently connected (iPhone USB service present but no device attached)
-```
-
-### Result for Task 002
-
-```text
-Status: COMPLETE
-Date: 2026-02-16
-
-Findings (combined with Task 004):
-
-PROXY CONNECTIVITY
-- Active interface: USB 10/100/1000 LAN (192.168.86.38), NOT Wi-Fi
-- Initial setup used Wi-Fi — proxy settings had no effect until corrected
-- networksetup vs scutil: must target the active interface or scutil --proxy shows nothing
-- Proxy heartbeat and blocking confirmed working before test (ads.google.com → 403)
-
-TRAFFIC STATS (proxy session)
-- Total connections: 2105
-- Total requests: 2095
-- Total blocked: 1963 (93.7% block rate)
-- Total bytes out (to client): ~80 MB
-- Client 192.168.86.38 (Ethernet): 1114 requests, 983 blocked
-- Client 192.168.86.27 (Wi-Fi background): 981 requests, 980 blocked
-
-APPLE NEWS AD BLOCKING — WORKS
-- User confirmed: "News seems to not be showing ads anymore"
-- news.iadsdk.apple.com — 108 blocks (Apple's iAd SDK, serves News ads)
-- news-events.apple.com — 424 blocks (News telemetry/analytics)
-- news-app-events.apple.com — 116 blocks (News app events)
-- News continued to function normally with ads removed
-- No crashes or content loading failures in News
-
-SAFARI — OVER-BLOCKING CAUSES BREAKAGE
-- User reported: "very slow and lots of stuff on pages are missing"
-- Legitimate ad blocks: doubleclick.net (84), ad-delivery.net (80),
-  amazon-adsystem.com (64), googlesyndication.com (40), adnxs.com (40)
-- False positive blocks causing breakage:
-  - registry.api.cnn.io (66) — CNN's content API, not ads
-  - cdn.optimizely.com (72) — A/B testing, some sites need it for rendering
-  - api.rlcdn.com (64) — LiveRamp tracking (may affect content loading)
-- 93.7% block rate is far too aggressive for general browsing
-
-KEY CONCLUSIONS
-1. Apple News DOES route traffic through the system HTTP proxy
-2. Domain-level blocking of news.iadsdk.apple.com suppresses News ads
-3. HTTPS content inspection is NOT needed for basic News ad blocking
-4. Pi-hole-style blocklists are too aggressive for browser proxy use
-5. News uses QUIC (HTTP/3) for content but still routes ad SDK via proxy
-6. The proxy needs a whitelist or more selective blocklist for Safari use
-```
-
-### Result for Task 003
-
-```text
-Status: SKIPPED
-Date: 2026-02-16
-Findings: No iOS device was connected during testing. Task remains available for
-future testing when an iPhone/iPad is available.
-```
-
-### Result for Task 004
-
-```text
-Status: COMPLETE
-Date: 2026-02-16
-
-Findings (combined with Task 002):
-
-BASELINE CAPTURE (no proxy, ~5 min Apple News browsing)
-
-Traffic volume: News downloaded ~32 MiB, uploaded ~516 KiB
-
-Protocol: Apple News uses QUIC (HTTP/3) for nearly all connections.
-Log shows "quic-connection" throughout. This is UDP-based, meaning a
-traditional TCP HTTP CONNECT proxy cannot intercept QUIC content traffic.
-
-DNS: Almost zero DNS queries captured on port 53 (only 2 unrelated domains).
-Apple News uses encrypted DNS (DoH/DoT), bypassing standard DNS interception.
-
-Processes observed: News (main), NewsTag, NewsToday2
-
-Domains contacted (from unified log URL extraction):
-  Apple infrastructure:
-  - news-edge.apple.com — News API/config endpoint
-  - news-todayconfig-edge.apple.com — Today feed config
-  - news-assets.apple.com — Static assets (layouts, themes, images, data feeds)
-  - c.apple.news — Article content and images (bulk of traffic)
-  - gateway.icloud.com — CloudKit database queries (articles, for-you, magazines)
-  - bag.itunes.apple.com — iTunes bag config
-  - s.mzstatic.com — Apple static content (cert setup)
-  - fpinit.itunes.apple.com — Fingerprint/security initialization
-
-  Third-party ad domains: NONE visible in baseline
-  All traffic goes to Apple-owned domains.
-
-Ad delivery pattern: Ads in Apple News appear to be served through
-news.iadsdk.apple.com (Apple's own iAd SDK), which is an Apple domain.
-No third-party ad networks observed in the baseline capture.
-
-PROXY CAPTURE (with proxy active, ~5 min Apple News + Safari)
-
-Apple News routed ad/telemetry traffic through the proxy:
-  - news.iadsdk.apple.com (108 requests, all blocked)
-  - news-events.apple.com (424 requests, all blocked)
-  - news-app-events.apple.com (116 requests, all blocked)
-Content traffic (c.apple.news, news-assets.apple.com) likely still
-used QUIC directly, bypassing the proxy.
-
-Safari routed all traffic through the proxy, including ad domains:
-  - securepubads.g.doubleclick.net, ad-delivery.net,
-    aax.amazon-adsystem.com, pagead2.googlesyndication.com, ib.adnxs.com
-
-FEASIBILITY ASSESSMENT
-- Domain-level proxy blocking: VIABLE for Apple News ads
-- The key domain is news.iadsdk.apple.com
-- HTTPS content inspection: NOT needed for News ad suppression
-- DNS-level blocking: NOT viable (News uses encrypted DNS)
-- QUIC interception: Would be needed to inspect content traffic,
-  but is unnecessary since ad SDK is a separate domain
-- Blocklist tuning: Required — Pi-hole lists are too broad for
-  proxy use with Safari (false positives on content APIs)
-```
+*(Results for Tasks 005 and 003 will be recorded here as testing is completed.)*
 
 ---
 
 ## Completed Tasks Archive
 
-(Move completed task/result pairs here to keep the active sections clean.)
+### Task 001: Environment Discovery (COMPLETE, 2026-02-16)
+
+- macOS 26.3 on M1 Max MacBook Pro (32 GB)
+- Connected via Wi-Fi on 192.168.86.27 (USB Ethernet also available at 192.168.86.38)
+- Apple News 11.3 installed (system app), Safari only browser
+- No proxy tools, no custom CAs, clean baseline
+- Proxy at njv-cachyos.local:18737 reachable — heartbeat confirmed
+
+### Task 002: Apple News Traffic Analysis (COMPLETE, 2026-02-16)
+
+Combined results with Task 004. Key findings:
+
+**Proxy connectivity**: Active interface was USB Ethernet (192.168.86.38), not Wi-Fi. Initial proxy setup targeted Wi-Fi and had no effect until corrected. Always check the active interface with `route -n get default`.
+
+**Traffic stats**: 2105 connections, 1963 blocked (93.7% block rate across Safari + News).
+
+**Apple News ad blocking — WORKS**:
+- User confirmed: "News seems to not be showing ads anymore"
+- `news.iadsdk.apple.com` — 108 blocks (Apple's iAd SDK, serves News ads)
+- `news-events.apple.com` — 424 blocks (News telemetry/analytics)
+- `news-app-events.apple.com` — 116 blocks (News app events)
+- News continued to function normally with ads removed
+
+**Safari — over-blocking causes breakage**:
+- User reported: "very slow and lots of stuff on pages are missing"
+- Legitimate ad blocks: doubleclick.net (84), ad-delivery.net (80), amazon-adsystem.com (64)
+- False positives: `registry.api.cnn.io` (66, CNN content API), `cdn.optimizely.com` (72, A/B testing), `api.rlcdn.com` (64)
+- 93.7% block rate is too aggressive for general browsing
+
+### Task 003: iOS Device Proxy (SKIPPED, 2026-02-16)
+
+No iOS device connected during testing. Task carried forward.
+
+### Task 004: Apple News Internal Behavior (COMPLETE, 2026-02-16)
+
+**Baseline capture (no proxy)**:
+- News downloads ~32 MiB, uploads ~516 KiB in 5 min session
+- Protocol: QUIC (HTTP/3) for nearly all connections (UDP-based)
+- DNS: Encrypted (DoH/DoT), zero port-53 queries for News domains
+- Processes: News, NewsTag, NewsToday2
+- Content domains: `c.apple.news`, `news-assets.apple.com`, `gateway.icloud.com`, `news-edge.apple.com`
+- Third-party ad domains: NONE — all traffic to Apple-owned domains
+- Ad delivery: via `news.iadsdk.apple.com` (Apple's iAd SDK)
+
+**Proxy capture**:
+- News routed ad/telemetry through proxy: `news.iadsdk.apple.com` (108), `news-events.apple.com` (424), `news-app-events.apple.com` (116)
+- Content traffic used QUIC directly, bypassing proxy
+
+**Feasibility**: Domain-level proxy blocking VIABLE for News ads. HTTPS inspection NOT needed. DNS blocking NOT viable (encrypted DNS). Blocklist tuning required for Safari.
 
 ---
 
 ## Notes
 
-- The proxy is built and verified on Linux with Chromium (v0.5.0). **Proxy is currently running at `njv-cachyos.local:18737`**. The macOS side needs to fill in environment info (Task 001) and then proceed with testing.
+### Proxy Info
+
+- The proxy is built and verified on Linux with Chromium and macOS with Safari + Apple News (v0.5.0).
+- Proxy address: `njv-cachyos.local:18737` (must be started with `--addr 0.0.0.0:18737` for LAN access).
 - Both machines must be on the same network. Check firewall rules if the heartbeat endpoint isn't reachable.
-- Do NOT install custom CA certificates until explicitly instructed. Domain blocking works at the CONNECT level — we see the domain name and block before the TLS handshake, but cannot inspect encrypted content.
-- Current blocking is domain-level only. Ads served from the same domain as content (e.g., Apple's own ad infrastructure) will NOT be blocked by this approach. That's the next phase (content inspection with MITM).
-- The `blocklist.db` file is created on first run. Subsequent starts reuse it without re-downloading. Use `fpsd update-blocklist` to refresh.
+- The `blocklist.db` file is created on first run. Subsequent starts reuse it. Use `fpsd update-blocklist` to refresh.
+
+### Lessons Learned from Testing (2026-02-16)
+
+- **Network interface matters**: `networksetup -setwebproxy` must target the active interface. The Mac had both Wi-Fi and USB Ethernet; configuring Wi-Fi had no effect when Ethernet was active. Always check with `route -n get default` first, and verify with `scutil --proxy`.
+- **Apple News ad blocking works at the domain level**: No MITM or content inspection needed. The iAd SDK (`news.iadsdk.apple.com`) is a separate domain from content.
+- **Pi-hole blocklists are too aggressive for proxy use**: 93.7% block rate in Safari. DNS blocklists assume they're blocking at the network edge where false positives just mean a page element doesn't load. At the proxy level, false positives break entire page loads.
+- **Apple News uses QUIC for content**: Content traffic bypasses the TCP proxy entirely. This is fine — we only need to block the ad SDK domain, which routes through the proxy as a standard HTTPS CONNECT.
+- **Apple News uses encrypted DNS**: Zero port-53 queries. Pi-hole/DNS-based blocking cannot reach News. This validates the proxy approach.
+- **Do NOT install custom CA certificates** until explicitly instructed. Domain blocking works at the CONNECT level — we see the domain name and block before the TLS handshake.

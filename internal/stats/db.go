@@ -22,9 +22,15 @@ type DB struct {
 
 	// lastClients / lastDomainReqs / lastDomainBlocks store the cumulative
 	// snapshot from the previous flush so we can compute deltas.
-	lastClients     map[string]ClientSnapshot
-	lastDomainReqs  map[string]int64
-	lastDomainBlks  map[string]int64
+	lastClients      map[string]ClientSnapshot
+	lastDomainReqs   map[string]int64
+	lastDomainBlks   map[string]int64
+	lastDomainAllows map[string]int64
+
+	// allowSnapshotFn is an optional callback that returns per-domain allow
+	// counts from the blocklist package. Set via SetAllowStatsSource to
+	// avoid an import cycle between stats and blocklist.
+	allowSnapshotFn func() map[string]int64
 }
 
 // Open opens or creates a stats database at the given path.
@@ -35,14 +41,15 @@ func Open(dbPath string, collector *Collector, logger *slog.Logger, flushInterva
 	}
 
 	db := &DB{
-		conn:           conn,
-		collector:      collector,
-		logger:         logger,
-		interval:       flushInterval,
-		done:           make(chan struct{}),
-		lastClients:    make(map[string]ClientSnapshot),
-		lastDomainReqs: make(map[string]int64),
-		lastDomainBlks: make(map[string]int64),
+		conn:             conn,
+		collector:        collector,
+		logger:           logger,
+		interval:         flushInterval,
+		done:             make(chan struct{}),
+		lastClients:      make(map[string]ClientSnapshot),
+		lastDomainReqs:   make(map[string]int64),
+		lastDomainBlks:   make(map[string]int64),
+		lastDomainAllows: make(map[string]int64),
 	}
 
 	if err := db.ensureSchema(); err != nil {
@@ -51,6 +58,12 @@ func Open(dbPath string, collector *Collector, logger *slog.Logger, flushInterva
 	}
 
 	return db, nil
+}
+
+// SetAllowStatsSource sets the callback used to snapshot per-domain allow
+// counts from the blocklist. This avoids an import cycle between packages.
+func (db *DB) SetAllowStatsSource(fn func() map[string]int64) {
+	db.allowSnapshotFn = fn
 }
 
 // Start begins the background flush loop.
@@ -175,6 +188,30 @@ func (db *DB) Flush() (err error) {
 		}
 	}
 	db.lastDomainReqs = currentReqs
+
+	// Flush per-domain allow count deltas (if source is configured).
+	if db.allowSnapshotFn != nil {
+		currentAllows := db.allowSnapshotFn()
+		for domain, count := range currentAllows {
+			prev := db.lastDomainAllows[domain]
+			delta := count - prev
+			if delta == 0 {
+				continue
+			}
+			err = sqlitex.Execute(db.conn, `
+				INSERT INTO allowed_domains (domain, count)
+				VALUES (?, ?)
+				ON CONFLICT (domain) DO UPDATE SET
+					count = count + excluded.count
+			`, &sqlitex.ExecOptions{
+				Args: []any{domain, delta},
+			})
+			if err != nil {
+				return fmt.Errorf("upsert allowed_domains: %w", err)
+			}
+		}
+		db.lastDomainAllows = currentAllows
+	}
 
 	return nil
 }
@@ -404,6 +441,65 @@ func (db *DB) MergedTopClients(n int) []ClientSnapshot {
 	return result
 }
 
+// TopAllowed returns the top n allowed domains from the database.
+func (db *DB) TopAllowed(n int) []DomainCount {
+	var out []DomainCount
+	_ = sqlitex.Execute(db.conn, `
+		SELECT domain, count FROM allowed_domains
+		ORDER BY count DESC LIMIT ?
+	`, &sqlitex.ExecOptions{
+		Args: []any{n},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			out = append(out, DomainCount{
+				Domain: stmt.ColumnText(0),
+				Count:  stmt.ColumnInt64(1),
+			})
+			return nil
+		},
+	})
+	return out
+}
+
+// MergedTopAllowed returns the top n allowed domains by merging DB totals
+// with unflushed in-memory deltas.
+func (db *DB) MergedTopAllowed(n int) []DomainCount {
+	merged := make(map[string]int64)
+
+	// DB cumulative totals.
+	for _, dc := range db.allAllowedDomains() {
+		merged[dc.Domain] = dc.Count
+	}
+
+	// Add only the unflushed delta from in-memory.
+	if db.allowSnapshotFn != nil {
+		for domain, count := range db.allowSnapshotFn() {
+			delta := count - db.lastDomainAllows[domain]
+			if delta > 0 {
+				merged[domain] += delta
+			}
+		}
+	}
+
+	return topNFromMap(merged, n)
+}
+
+// allAllowedDomains returns all allowed domain counts (no limit).
+func (db *DB) allAllowedDomains() []DomainCount {
+	var out []DomainCount
+	_ = sqlitex.Execute(db.conn, `
+		SELECT domain, count FROM allowed_domains ORDER BY count DESC
+	`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			out = append(out, DomainCount{
+				Domain: stmt.ColumnText(0),
+				Count:  stmt.ColumnInt64(1),
+			})
+			return nil
+		},
+	})
+	return out
+}
+
 // topNFromMap extracts the top n entries from a domain->count map.
 func topNFromMap(m map[string]int64, n int) []DomainCount {
 	out := make([]DomainCount, 0, len(m))
@@ -438,6 +534,11 @@ func (db *DB) ensureSchema() error {
 		) WITHOUT ROWID;
 
 		CREATE TABLE IF NOT EXISTS domain_requests (
+			domain TEXT NOT NULL PRIMARY KEY,
+			count  INTEGER NOT NULL DEFAULT 0
+		) WITHOUT ROWID;
+
+		CREATE TABLE IF NOT EXISTS allowed_domains (
 			domain TEXT NOT NULL PRIMARY KEY,
 			count  INTEGER NOT NULL DEFAULT 0
 		) WITHOUT ROWID;

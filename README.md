@@ -9,6 +9,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Run](#run)
 - [CLI Flags](#cli-flags)
 - [Domain Blocking](#domain-blocking)
+- [Allowlist and Inline Blocklist](#allowlist-and-inline-blocklist)
 - [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
 - [Test](#test)
@@ -107,6 +108,30 @@ Supported list formats: hosts (`0.0.0.0 domain`), adblock (`||domain^`), and dom
 
 With no blocklist URLs (neither in config file nor via `--blocklist-url` flags), the proxy runs in passthrough mode (no blocking).
 
+## Allowlist and Inline Blocklist
+
+Beyond URL-sourced blocklists, the config file supports two additional mechanisms for tuning:
+
+**Inline blocklist** — block individual domains without downloading a full list:
+
+```yaml
+blocklist:
+  - news.iadsdk.apple.com
+  - news-events.apple.com
+  - news-app-events.apple.com
+```
+
+**Allowlist** — domains that are never blocked, even if they appear in blocklists. Supports exact match and suffix patterns (`*.example.com` matches the base domain and all subdomains):
+
+```yaml
+allowlist:
+  - registry.api.cnn.io
+  - cdn.optimizely.com
+  - "*.cnn.io"
+```
+
+Allowlist takes priority over all block sources (URL-sourced and inline). Inline blocklist entries are merged into the in-memory cache at startup and are not stored in `blocklist.db` — they survive `fpsd update-blocklist` since they come from config.
+
 ## Management Endpoints
 
 ### `/fps/heartbeat` — Health Check
@@ -131,7 +156,7 @@ curl -s http://localhost:18737/fps/stats | python3 -m json.tool
 curl -s 'http://localhost:18737/fps/stats?n=5&period=24h' | python3 -m json.tool
 ```
 
-Returns connections, blocking stats (with top blocked domains), top requested domains, top clients by request count, and aggregate traffic totals.
+Returns connections, blocking stats (with top blocked and top allowed domains), top requested domains, top clients by request count, and aggregate traffic totals.
 
 Query parameters: `n` (top-N size, default 10), `period` (`1h`, `24h`, `7d`, or omit for all time).
 
@@ -182,6 +207,18 @@ fpsd.yml            Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v0.6.0 — 2026-02-16
+
+- Allowlist: domains that are never blocked, with exact match and suffix pattern (`*.example.com`) support
+- Inline blocklist: block individual domains via config without downloading full lists
+- Allowlist takes priority over all block sources (URL-sourced and inline)
+- Allow counters: `allows_total`, `allowlist_size`, `top_allowed` in `/fps/stats`
+- Allow stats persisted to `stats.db` alongside block stats (delta-based flush)
+- Config validation for `blocklist` (no wildcards) and `allowlist` (exact or `*.domain`) entries
+- Startup log shows allowlist size and inline blocklist count
+- 13 new tests for allowlist matching, inline blocklist, and allow counters
+- 90 total tests (all passing)
 
 ### v0.5.0 — 2026-02-16
 

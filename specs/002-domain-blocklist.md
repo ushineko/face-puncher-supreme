@@ -149,7 +149,7 @@ No new endpoints needed. The existing `/fps/probe` endpoint gains the block stat
 - [x] Startup log shows number of domains loaded and sources configured
 - [x] All existing tests pass (no regression)
 - [x] New unit tests for DB operations, parser, and blocking behavior
-- [ ] Verified with real browser: ad domains blocked, normal browsing works
+- [x] Verified with real browser: ad domains blocked (macOS Safari + Apple News, 2026-02-16). **Note**: Pi-hole blocklists cause over-blocking in Safari (93.7% block rate, false positives on content APIs like `registry.api.cnn.io` and `cdn.optimizely.com`). Apple News ad blocking works correctly — `news.iadsdk.apple.com` blocked, ads suppressed, app functions normally. Blocklist tuning addressed in spec 005.
 
 ## Out of Scope
 

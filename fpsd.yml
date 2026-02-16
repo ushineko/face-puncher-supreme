@@ -24,6 +24,21 @@ blocklist_urls:
   - https://urlhaus.abuse.ch/downloads/hostfile/
   - https://big.oisd.nl/
 
+# Inline blocklist — individual domains to block without needing a downloaded list.
+# These are merged with URL-sourced domains at startup.
+# blocklist:
+#   - news.iadsdk.apple.com
+#   - news-events.apple.com
+#   - news-app-events.apple.com
+
+# Allowlist — domains that are never blocked, even if they appear in blocklists.
+# Supports exact match and suffix match (*.example.com matches all subdomains).
+# Allowlist takes priority over both URL-sourced and inline blocklist entries.
+# allowlist:
+#   - registry.api.cnn.io
+#   - cdn.optimizely.com
+#   - "*.cnn.io"
+
 # Timeouts — Go duration strings (e.g., "5s", "1m", "2m30s").
 timeouts:
   shutdown: "5s"       # graceful shutdown deadline

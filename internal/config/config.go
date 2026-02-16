@@ -27,6 +27,8 @@ type Config struct {
 	Verbose       bool       `yaml:"verbose"`
 	DataDir       string     `yaml:"data_dir"`
 	BlocklistURLs []string   `yaml:"blocklist_urls"`
+	Blocklist     []string   `yaml:"blocklist"`
+	Allowlist     []string   `yaml:"allowlist"`
 	Timeouts      Timeouts   `yaml:"timeouts"`
 	Management    Management `yaml:"management"`
 	Stats         Stats      `yaml:"stats"`
@@ -147,17 +149,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("listen: invalid address %q: %v", c.Listen, err))
 	}
 
-	// Blocklist URLs.
-	for i, raw := range c.BlocklistURLs {
-		u, err := url.Parse(raw)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("blocklist_urls[%d]: invalid URL %q: %v", i, raw, err))
-			continue
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			errs = append(errs, fmt.Sprintf("blocklist_urls[%d]: scheme must be http or https, got %q", i, u.Scheme))
-		}
-	}
+	errs = append(errs, validateBlocklistURLs(c.BlocklistURLs)...)
+	errs = append(errs, validateBlocklist(c.Blocklist)...)
+	errs = append(errs, validateAllowlist(c.Allowlist)...)
 
 	// Durations must be positive.
 	if c.Timeouts.Shutdown.Duration <= 0 {
@@ -185,6 +179,53 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateBlocklistURLs checks that all blocklist URLs are valid HTTP(S) URLs.
+func validateBlocklistURLs(urls []string) []string {
+	var errs []string
+	for i, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("blocklist_urls[%d]: invalid URL %q: %v", i, raw, err))
+			continue
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			errs = append(errs, fmt.Sprintf("blocklist_urls[%d]: scheme must be http or https, got %q", i, u.Scheme))
+		}
+	}
+	return errs
+}
+
+// validateBlocklist checks that inline blocklist entries are valid domain names.
+func validateBlocklist(domains []string) []string {
+	var errs []string
+	for i, d := range domains {
+		if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {
+			errs = append(errs, fmt.Sprintf("blocklist[%d]: invalid domain %q", i, d))
+		}
+	}
+	return errs
+}
+
+// validateAllowlist checks that allowlist entries are valid exact domains or
+// *.domain suffix patterns.
+func validateAllowlist(entries []string) []string {
+	var errs []string
+	for i, entry := range entries {
+		switch {
+		case entry == "" || strings.Contains(entry, "/") || strings.Contains(entry, " "):
+			errs = append(errs, fmt.Sprintf("allowlist[%d]: invalid entry %q", i, entry))
+		case strings.HasPrefix(entry, "*."):
+			domain := entry[2:]
+			if domain == "" || strings.Contains(domain, "*") {
+				errs = append(errs, fmt.Sprintf("allowlist[%d]: invalid suffix pattern %q", i, entry))
+			}
+		case strings.Contains(entry, "*"):
+			errs = append(errs, fmt.Sprintf("allowlist[%d]: wildcard must be prefix *.domain, got %q", i, entry))
+		}
+	}
+	return errs
 }
 
 // Dump serializes the config to YAML.

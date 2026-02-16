@@ -25,9 +25,11 @@ type ServerInfo interface {
 
 // BlockData holds blocklist metadata for the stats response.
 type BlockData struct {
-	Total   int64
-	Size    int
-	Sources int
+	Total         int64
+	AllowsTotal   int64
+	Size          int
+	AllowlistSize int
+	Sources       int
 }
 
 // TopEntry is a domain with a counter value.
@@ -67,9 +69,12 @@ type ConnectionsBlock struct {
 // BlockingBlock holds block statistics.
 type BlockingBlock struct {
 	BlocksTotal      int64      `json:"blocks_total"`
+	AllowsTotal      int64      `json:"allows_total"`
 	BlocklistSize    int        `json:"blocklist_size"`
+	AllowlistSize    int        `json:"allowlist_size"`
 	BlocklistSources int        `json:"blocklist_sources"`
 	TopBlocked       []TopEntry `json:"top_blocked"`
+	TopAllowed       []TopEntry `json:"top_allowed"`
 }
 
 // DomainsBlock holds domain request statistics.
@@ -166,17 +171,22 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 
 		// Block stats from blocklist DB.
 		var blocksTotal int64
+		var allowsTotal int64
 		var blocklistSize int
+		var allowlistSize int
 		var blocklistSources int
 		if sp.BlockFn != nil {
 			if bd := sp.BlockFn(); bd != nil {
 				blocksTotal = bd.Total
+				allowsTotal = bd.AllowsTotal
 				blocklistSize = bd.Size
+				allowlistSize = bd.AllowlistSize
 				blocklistSources = bd.Sources
 			}
 		}
 
 		var topBlocked []TopEntry
+		var topAllowed []TopEntry
 		var topRequested []TopEntry
 		var topClients []ClientEntry
 		var totalReqs, totalBlocked, totalBytesIn, totalBytesOut int64
@@ -185,6 +195,7 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 		case periodSince != nil && sp.StatsDB != nil:
 			// Time-bounded queries from hourly rollups.
 			topBlocked = domainCountsToEntries(sp.StatsDB.TopBlocked(n))
+			topAllowed = domainCountsToEntries(sp.StatsDB.TopAllowed(n))
 			topRequested = domainCountsToEntries(sp.StatsDB.TopRequested(n))
 			clients := sp.StatsDB.TopClientsSince(n, *periodSince)
 			topClients = clientSnapsToEntries(clients)
@@ -192,6 +203,7 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 		case sp.StatsDB != nil:
 			// All-time: merge in-memory + DB.
 			topBlocked = domainCountsToEntries(sp.StatsDB.MergedTopBlocked(n))
+			topAllowed = domainCountsToEntries(sp.StatsDB.MergedTopAllowed(n))
 			topRequested = domainCountsToEntries(sp.StatsDB.MergedTopRequested(n))
 			topClients = clientSnapsToEntries(sp.StatsDB.MergedTopClients(n))
 			totalReqs = sp.Collector.TotalRequests()
@@ -199,7 +211,7 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 			totalBytesIn = sp.Collector.TotalBytesIn()
 			totalBytesOut = sp.Collector.TotalBytesOut()
 		default:
-			// No DB — just return in-memory data.
+			// No DB — just return in-memory data (no allow data without DB).
 			topBlocked = domainCountsToEntries(topN(sp.Collector.SnapshotDomainBlocks(), n))
 			topRequested = domainCountsToEntries(topN(sp.Collector.SnapshotDomainRequests(), n))
 			topClients = clientSnapsToEntries(topNClients(sp.Collector.SnapshotClients(), n))
@@ -211,6 +223,9 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 
 		if topBlocked == nil {
 			topBlocked = []TopEntry{}
+		}
+		if topAllowed == nil {
+			topAllowed = []TopEntry{}
 		}
 		if topRequested == nil {
 			topRequested = []TopEntry{}
@@ -226,9 +241,12 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 			},
 			Blocking: BlockingBlock{
 				BlocksTotal:      blocksTotal,
+				AllowsTotal:      allowsTotal,
 				BlocklistSize:    blocklistSize,
+				AllowlistSize:    allowlistSize,
 				BlocklistSources: blocklistSources,
 				TopBlocked:       topBlocked,
+				TopAllowed:       topAllowed,
 			},
 			Domains: DomainsBlock{
 				TopRequested: topRequested,
