@@ -179,7 +179,7 @@ Plugins are site-specific content filters that inspect and modify MITM'd HTTP re
 plugins:
   reddit-promotions:
     enabled: true
-    mode: "intercept"        # "intercept" or "filter"
+    mode: "filter"           # "intercept" or "filter"
     placeholder: "visible"   # "visible", "comment", or "none"
     domains:
       - www.reddit.com
@@ -272,6 +272,19 @@ fpsd.yml            Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v0.9.0 — 2026-02-17
+
+- Reddit promotions filter: strips promoted/sponsored content from Reddit's Shreddit UI (spec 008)
+- Feed ads (`<shreddit-ad-post>`), comment-tree ads, comment-page ads, and right-rail promoted posts removed
+- Byte-level HTML element removal using Reddit's unique custom element names (no full HTML parser needed)
+- URL-scoped processing: only homepage, feed, comment, and right-rail paths are inspected
+- Quick-skip optimization: responses without ad marker strings bypass element scanning
+- Placeholder insertion per configured mode (`visible`, `comment`, `none`)
+- FilterResult reporting: accurate match/modify/rule/count data for stats integration
+- 6 HTML test fixtures extracted from real interception captures for regression testing
+- 25 new tests for filter rules, URL scoping, quick-skip, element removal, and fixture integrity
+- 167 total tests (all passing)
 
 ### v0.8.0 — 2026-02-16
 

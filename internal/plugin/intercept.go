@@ -68,7 +68,10 @@ func (f *InterceptionFilter) Init(cfg PluginConfig, logger *slog.Logger) error {
 
 // Filter captures the request/response pair to disk and returns the body
 // unchanged (interception mode does not modify responses).
-func (f *InterceptionFilter) Filter(req *http.Request, resp *http.Response, body []byte) ([]byte, FilterResult, error) {
+//nolint:unparam // FilterResult intentionally zero — interception never modifies
+func (f *InterceptionFilter) Filter(
+	req *http.Request, resp *http.Response, body []byte,
+) ([]byte, FilterResult, error) {
 	seq := f.sequence.Add(1)
 
 	// Save request metadata.

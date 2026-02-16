@@ -457,15 +457,4 @@ func TestBodyExtension(t *testing.T) {
 	}
 }
 
-// --- Reddit registry test ---
-
-func TestRedditPluginRegistered(t *testing.T) {
-	constructor, ok := Registry["reddit-promotions"]
-	require.True(t, ok, "reddit-promotions must be registered")
-
-	p := constructor()
-	assert.Equal(t, "reddit-promotions", p.Name())
-	assert.Equal(t, "0.1.0", p.Version())
-	assert.Contains(t, p.Domains(), "www.reddit.com")
-	assert.Contains(t, p.Domains(), "old.reddit.com")
-}
+// Reddit registration and filter tests are in reddit_test.go.

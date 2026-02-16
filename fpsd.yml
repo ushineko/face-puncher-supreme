@@ -63,7 +63,7 @@ mitm:
 plugins:
   reddit-promotions:
     enabled: true
-    mode: "intercept"        # "intercept" captures traffic; "filter" applies rules
+    mode: "filter"           # "intercept" captures traffic; "filter" applies rules
     placeholder: "visible"   # "visible", "comment", or "none"
     domains:
       - www.reddit.com

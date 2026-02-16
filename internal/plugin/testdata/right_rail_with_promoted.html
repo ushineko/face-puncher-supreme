@@ -1,0 +1,129 @@
+<!-- Test fixture: Reddit right rail with 1 ad-event-tracker wrapped promoted post
+     and 1 organic reddit-pdp-right-rail-post.
+     Extracted from intercept 032-body.html (2026-02-16T14-56-29 capture).
+     Tracking payloads truncated; structure preserved for filter testing. -->
+
+<!-- Organic right-rail post -->
+<reddit-pdp-right-rail-post class="nd:visible" event-data="[truncated]">
+  <faceplate-tracker source="post_detail" action="click" noun="post" class="visible" data-faceplate-tracking-context="[truncated]">
+  </faceplate-tracker>
+  <div class="relative -m-xs p-xs block xs:rounded-4 hover:bg-neutral-background-weak-hover">
+    <a rpl class="absolute inset-0 a cursor-pointer no-visited no-underline hover:no-underline" href="/r/MadeMeCry/comments/1kqcfq1/chimpanzee_suffering_from_depression_is_arranged/">
+      <faceplate-screen-reader-content>
+        Chimpanzee suffering from depression is arranged to meet his former owners by the zoo
+      </faceplate-screen-reader-content>
+    </a>
+    <faceplate-tracker source="post_detail" action="view" noun="post" data-faceplate-tracking-context="[truncated]">
+    </faceplate-tracker>
+
+    <div class="flex text-neutral-content text-12">
+      <div class="flex flex-col grow min-w-0 overflow-hidden">
+        <div class="items-center w-full">
+          <a data-testid="subreddit-name" class="inline-flex overflow-hidden items-center text-secondary-plain-weak" href="/r/MadeMeCry/">
+            <span class="truncate text-12">r/MadeMeCry</span>
+          </a>
+        </div>
+
+        <a class="block grow min-w-0" href="/r/MadeMeCry/comments/1kqcfq1/chimpanzee_suffering_from_depression_is_arranged/">
+          <div class="i18n-list-item-post-content flex grow min-w-0 mt-2xs">
+            <h3 class="i18n-list-item-post-title text-14 line-clamp-2 m-0 font-semibold overflow-hidden group-hover:underline" title="Chimpanzee suffering from depression is arranged to meet his former owners by the zoo">
+              Chimpanzee suffering from depression is arranged to meet his former owners by the zoo
+            </h3>
+          </div>
+        </a>
+
+        <div class="flex items-center text-12 text-neutral-content-weak mt-xs">
+          <span class="flex items-center">
+            <faceplate-number number="789" pretty></faceplate-number> upvotes
+          </span>
+          <span class="mx-xs">&bull;</span>
+          <span class="flex items-center">
+            <faceplate-number number="28" pretty></faceplate-number> comments
+          </span>
+        </div>
+      </div>
+
+      <div data-testid="post-thumbnail" class="relative rounded-2 overflow-hidden box-border border border-solid border-neutral-border-weak h-[84px] w-[84px] ms-sm shrink-0">
+        <a class="block w-100 h-100" href="/r/MadeMeCry/comments/1kqcfq1/chimpanzee_suffering_from_depression_is_arranged/" aria-label="right rail post thumbnail">
+          <img alt="r/MadeMeCry - Chimpanzee suffering from depression" class="w-100 h-100 object-cover" loading="lazy" src="https://preview.redd.it/example-thumbnail.jpg">
+        </a>
+      </div>
+    </div>
+  </div>
+</reddit-pdp-right-rail-post>
+
+<!-- Promoted right-rail post with ad-event-tracker wrapper -->
+<reddit-pdp-right-rail-post class="nd:visible" event-data="[truncated]">
+
+    <ac-track class="nd:visible" trigger="click" san="post_detail|click|post" data-faceplate-tracking-context="[truncated]">
+    </ac-track>
+
+    <ac-track class="nd:visible" trigger="view" once="true" san="post_detail|view|post" data-faceplate-tracking-context="[truncated]">
+    </ac-track>
+
+    <ad-event-tracker class="relative" ad-events="[truncated]" encrypted-tracking-payload="[truncated]" ad-transparency-encoded-data="[truncated]">
+
+    <shreddit-dynamic-ad-link class="absolute inset-0 hover:bg-neutral-background-hover -mx-xs xs:rounded-4" anchor-style-class="w-100 block h-100" target="_blank" post-id="t3_1r5xtpb" impression-id="5690934144917783463" click-location="background">
+    </shreddit-dynamic-ad-link>
+
+    <div class="-m-xs p-xs block xs:rounded-4 hover:bg-neutral-background-hover">
+      <div class="flex flex-row">
+        <div class="grow min-w-0 me-sm">
+
+          <div slot="credit-bar" class="text-neutral-content-weak relative flex justify-between items-center flex-1">
+            <div class="promoted-name-container flex flex-1 items-center gap-[6px] overflow-hidden text-12 pe-xs">
+              <click-location-tracker click-location="username" class="min-w-0 nd:visible">
+                <a rpl class="advertiser-name flex items-center relative h-lg text-neutral-content-weak no-visited hover:underline" href="/user/brutusBroth/">
+                  <span class="inline-flex items-center justify-center w-[1.5rem] h-[1.5rem] me-[6px]" rpl avatar>
+                    <span class="inline-flex snoovatar relative fp-avatar-container rounded-full w-[1.5rem] h-[1.5rem]">
+                      <img loading="lazy" src="https://styles.redditmedia.com/t5_example/styles/profileIcon.png" alt="brutusBroth avatar">
+                    </span>
+                  </span>
+                  <span class="truncate">brutusBroth</span>
+                </a>
+              </click-location-tracker>
+
+              <span class="inline-block my-0 text-neutral-content-weak created-separator">&bull;</span>
+
+              <shreddit-dynamic-ad-link target="_blank" post-id="t3_1r5xtpb" click-location="promoted_label" anchor-style-class="h-100 flex items-center" class="h-100" impression-id="5690934144917783463">
+                <span style="flex-shrink:9999;" class="promoted-label text-neutral-content-weak font-normal truncate">Promoted</span>
+              </shreddit-dynamic-ad-link>
+            </div>
+          </div>
+
+          <div class="mt-2xs">
+            <shreddit-dynamic-ad-link target="_blank" post-id="t3_1r5xtpb" click-location="title" anchor-style-class="relative" slot="headline" class="text-neutral-content-weak text-14 m-0 font-semibold overflow-hidden" impression-id="5690934144917783463">
+              Most "toppers" are just flavor. This one adds probiotics, calcium, hydration, and easier digestion.
+            </shreddit-dynamic-ad-link>
+          </div>
+
+        </div>
+        <div class="flex-1 block w-100 h-100">
+          <click-location-tracker click-location="media" enable-ad-post-hydration>
+            <a rpl class="block relative rounded-2 overflow-hidden box-border border border-solid border-neutral-border-weak" href="https://alb.reddit.com/cr?za=[truncated]" target="_blank">
+              <img width="82" height="82" alt="Thumbnail image: Most toppers are just flavor" loading="lazy" class="w-100 h-100 object-cover" src="https://preview.redd.it/example-ad-thumbnail.jpg">
+            </a>
+          </click-location-tracker>
+          <image-observer is-promoted promoted-post-type="video" placement="related_posts"></image-observer>
+        </div>
+      </div>
+
+      <div class="-mb-sm ad-link-bar isolate relative">
+        <shreddit-dynamic-ad-link target="_blank" post-id="t3_1r5xtpb" click-location="cta_whitespace" anchor-style-class="z-1 absolute w-100 h-100" class="h-100 w-100 nd:visible" impression-id="5690934144917783463">
+        </shreddit-dynamic-ad-link>
+        <div class="h-xl flex items-center justify-between py-xs px-md">
+          <div class="flex flex-col truncate mr-sm">
+            <shreddit-dynamic-ad-link class="ad-link-bar__domain z-2 text-12 truncate text-neutral-content-weak hover:underline" target="_blank" post-id="t3_1r5xtpb" impression-id="5690934144917783463">
+              brutusbroth.com
+            </shreddit-dynamic-ad-link>
+          </div>
+          <shreddit-dynamic-ad-link class="ad-link-bar__cta z-2" target="_blank" post-id="t3_1r5xtpb" render-as-button impression-id="5690934144917783463">
+            Shop Now
+          </shreddit-dynamic-ad-link>
+        </div>
+      </div>
+    </div>
+
+    </ad-event-tracker>
+
+</reddit-pdp-right-rail-post>

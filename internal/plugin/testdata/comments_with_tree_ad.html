@@ -1,0 +1,101 @@
+<!-- Test fixture: Reddit comment page with shreddit-comment-tree-ads container.
+     Contains 1 template block with a shreddit-comments-page-ad (placement="comment_trees"),
+     surrounded by comment context.
+     Extracted from intercept 031-body.html (2026-02-16T14-56-29 capture).
+     Tracking payloads truncated; structure preserved for filter testing. -->
+
+<!-- Simulated comment context before tree-ads -->
+<shreddit-comment author="AutoModerator" thingId="t1_o5oox0v" depth="0" permalink="/r/interesting/comments/1r6aomv/comment/o5oox0v/">
+  <div slot="comment-body">
+    <p>This is an automated comment from AutoModerator.</p>
+  </div>
+</shreddit-comment>
+
+<shreddit-comment-tree-ads>
+
+    <template id="comment-tree-ad_t1_o5osjga">
+
+    <shreddit-comments-page-ad id="t3_1p0ilm3" post-id="t3_1p0ilm3" class="promotedlink relative block" ad-type="display" author-id="t2_6chbtyk6" outbound-link-url="[truncated]" call-to-action="Learn More" impression-id="5730267371260675267" ad-events="[truncated]" encrypted-tracking-payload="[truncated]" ad-transparency-encoded-data="[truncated]" placement="comment_trees" ads-correlation-id="abc123-def456" permalink="/user/firehousesubs/comments/1p0ilm3/example_ad/" post-title="Example Firehouse Subs Ad" author="firehousesubs">
+
+    <shreddit-dynamic-ad-link slot="full-comments-page-ad-link" class="absolute inset-0 ms-[38px]" anchor-style-class="w-100 block h-100" target="_blank" post-id="t3_1p0ilm3" impression-id="5730267371260675267" click-location="background">
+    </shreddit-dynamic-ad-link>
+
+    <div slot="credit-bar" class="mb-sm flex justify-between items-center">
+      <div class="promoted-name-container flex flex-1 items-center gap-[6px] overflow-hidden text-12 pe-xs">
+        <click-location-tracker click-location="username" class="min-w-0 nd:visible">
+          <a rpl class="advertiser-name flex items-center relative h-xl text-neutral-content font-semibold no-visited no-underline hover:no-underline" href="/user/firehousesubs/">
+            <span class="truncate">u/firehousesubs</span>
+          </a>
+        </click-location-tracker>
+
+        <span class="inline-block my-0 text-neutral-content-weak created-separator">&bull;</span>
+
+        <shreddit-dynamic-ad-link target="_blank" post-id="t3_1p0ilm3" click-location="promoted_label" anchor-style-class="h-100 flex items-center" class="h-100" impression-id="5730267371260675267">
+          <span style="flex-shrink:9999;" class="promoted-label text-neutral-content-weak font-normal truncate">Promoted</span>
+        </shreddit-dynamic-ad-link>
+      </div>
+
+      <div class="relative min-w-[28px]">
+        <shreddit-post-overflow-menu class="nd:hidden" is-desktop-viewport is-ad ad-user-targeting-info="[truncated]" is-reportable-ad post-id="t3_1p0ilm3" impression-id="5730267371260675267" author-name="firehousesubs">
+        </shreddit-post-overflow-menu>
+      </div>
+    </div>
+
+    <div class="mb-2xs xs:mb-xs" dir="auto">
+      <shreddit-dynamic-ad-link target="_blank" post-id="t3_1p0ilm3" click-location="title" anchor-style-class="relative" class="text-neutral-content-strong font-semibold text-16">
+        Example Firehouse Subs Ad
+      </shreddit-dynamic-ad-link>
+    </div>
+
+    <div class="relative overflow-hidden mb-xs bg-neutral-background rounded-4">
+      <shreddit-aspect-ratio class="" id="t3_1p0ilm3-aspect-ratio">
+        <img alt="ad image" loading="lazy" src="https://preview.redd.it/example-ad-image.png" class="preview-img">
+      </shreddit-aspect-ratio>
+      <image-observer is-promoted promoted-post-type="display" placement="comment_trees"></image-observer>
+    </div>
+
+    </shreddit-comments-page-ad>
+
+    </template>
+
+    <template id="comment-tree-ad_t1_o5otuc9">
+
+    <shreddit-comments-page-ad id="t3_1r3ywcb" post-id="t3_1r3ywcb" class="promotedlink relative block" ad-type="display" author-id="t2_29dp3289" outbound-link-url="[truncated]" impression-id="5730267371260675268" ad-events="[truncated]" placement="comment_trees" permalink="/user/otherAdvertiser/comments/1r3ywcb/second_ad/" post-title="Second Comment Tree Ad" author="otherAdvertiser">
+
+    <shreddit-dynamic-ad-link slot="full-comments-page-ad-link" class="absolute inset-0 ms-[38px]" anchor-style-class="w-100 block h-100" target="_blank" post-id="t3_1r3ywcb" impression-id="5730267371260675268" click-location="background">
+    </shreddit-dynamic-ad-link>
+
+    <div slot="credit-bar" class="mb-sm flex justify-between items-center">
+      <div class="promoted-name-container flex flex-1 items-center gap-[6px] overflow-hidden text-12 pe-xs">
+        <click-location-tracker click-location="username" class="min-w-0 nd:visible">
+          <a rpl class="advertiser-name flex items-center relative h-xl text-neutral-content font-semibold" href="/user/otherAdvertiser/">
+            <span class="truncate">u/otherAdvertiser</span>
+          </a>
+        </click-location-tracker>
+        <span class="inline-block my-0 text-neutral-content-weak created-separator">&bull;</span>
+        <shreddit-dynamic-ad-link target="_blank" post-id="t3_1r3ywcb" click-location="promoted_label" impression-id="5730267371260675268">
+          <span class="promoted-label text-neutral-content-weak font-normal truncate">Promoted</span>
+        </shreddit-dynamic-ad-link>
+      </div>
+    </div>
+
+    <div class="mb-2xs" dir="auto">
+      <shreddit-dynamic-ad-link target="_blank" post-id="t3_1r3ywcb" click-location="title" class="text-neutral-content-strong font-semibold text-16">
+        Second Comment Tree Ad
+      </shreddit-dynamic-ad-link>
+    </div>
+
+    </shreddit-comments-page-ad>
+
+    </template>
+
+</shreddit-comment-tree-ads>
+
+<!-- Comment context after tree-ads -->
+<shreddit-comment-tree-stats total-comments="939"> </shreddit-comment-tree-stats>
+
+<shreddit-comment author="mspaceman" thingId="t1_o5ot9xz" depth="0" permalink="/r/interesting/comments/1r6aomv/comment/o5ot9xz/">
+  <div slot="comment-body">
+    <p>This is a real user comment after the ad container.</p>
+  </div>
+</shreddit-comment>
