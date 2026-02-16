@@ -12,6 +12,12 @@ func (s *Server) handleManagement(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatHandler(w, r)
 	case s.managementPrefix + "/stats":
 		s.statsHandler(w, r)
+	case s.managementPrefix + "/ca.pem":
+		if s.caPEMHandler != nil {
+			s.caPEMHandler(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
 	default:
 		http.NotFound(w, r)
 	}

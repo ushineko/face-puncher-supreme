@@ -10,6 +10,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [CLI Flags](#cli-flags)
 - [Domain Blocking](#domain-blocking)
 - [Allowlist and Inline Blocklist](#allowlist-and-inline-blocklist)
+- [MITM TLS Interception](#mitm-tls-interception)
 - [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
 - [Test](#test)
@@ -85,6 +86,7 @@ Subcommands:
 
 - `fpsd version` — Print version string and exit
 - `fpsd update-blocklist` — Re-download all blocklist URLs, rebuild the database, and exit
+- `fpsd generate-ca` — Generate CA certificate and private key for MITM (`--force` to overwrite)
 - `fpsd config dump` — Print the resolved configuration as YAML
 - `fpsd config validate` — Validate configuration and exit with 0 (ok) or 1 (error)
 
@@ -132,6 +134,39 @@ allowlist:
 
 Allowlist takes priority over all block sources (URL-sourced and inline). Inline blocklist entries are merged into the in-memory cache at startup and are not stored in `blocklist.db` — they survive `fpsd update-blocklist` since they come from config.
 
+## MITM TLS Interception
+
+For sites that serve ads from the same domain as content (e.g., Reddit promoted posts from `www.reddit.com`), domain blocking is insufficient. MITM TLS interception lets the proxy inspect HTTP traffic for configured domains.
+
+**Setup**:
+
+```bash
+# 1. Generate CA certificate and private key
+fpsd generate-ca
+
+# 2. Install CA in Chromium's trust store (Linux)
+curl -o fps-ca.pem http://localhost:18737/fps/ca.pem
+mkdir -p ~/.pki/nssdb
+certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Face Puncher Supreme CA" -i fps-ca.pem
+
+# 3. Configure domains in fpsd.yml
+```
+
+```yaml
+mitm:
+  domains:
+    - www.reddit.com
+    - old.reddit.com
+```
+
+Only explicitly listed domains are intercepted. All other HTTPS traffic remains in opaque tunnels. The blocklist check still happens first — blocked domains get 403 regardless of MITM config.
+
+MITM is HTTP/1.1 only. The proxy generates short-lived leaf certificates (24h) per domain, signed by the CA, cached in memory.
+
+**Subcommands**:
+
+- `fpsd generate-ca` — Create CA cert and key (refuses to overwrite; use `--force` to regenerate)
+
 ## Management Endpoints
 
 ### `/fps/heartbeat` — Health Check
@@ -142,7 +177,7 @@ Lightweight health check for monitoring. No database queries or sorting.
 curl -s http://localhost:18737/fps/heartbeat | python3 -m json.tool
 ```
 
-Returns JSON with status, version, mode, uptime, OS info, and startup timestamp.
+Returns JSON with status, version, mode, MITM status, uptime, OS info, and startup timestamp.
 
 ### `/fps/stats` — Full Statistics
 
@@ -156,11 +191,15 @@ curl -s http://localhost:18737/fps/stats | python3 -m json.tool
 curl -s 'http://localhost:18737/fps/stats?n=5&period=24h' | python3 -m json.tool
 ```
 
-Returns connections, blocking stats (with top blocked and top allowed domains), top requested domains, top clients by request count, and aggregate traffic totals.
+Returns connections, blocking stats (with top blocked and top allowed domains), MITM interception stats (total intercepts, top intercepted domains), top requested domains, top clients by request count, and aggregate traffic totals.
 
 Query parameters: `n` (top-N size, default 10), `period` (`1h`, `24h`, `7d`, or omit for all time).
 
 Stats are persisted to `stats.db` via periodic flush (default 60s) and survive restarts. Disable with `stats.enabled: false` in config (returns 501).
+
+### `/fps/ca.pem` — CA Certificate Download
+
+Download the MITM CA certificate for client installation. Returns 404 when MITM is not configured.
 
 ## Logging
 
@@ -197,6 +236,7 @@ cmd/fpsd/           Daemon entrypoint (Cobra CLI)
 internal/config/    YAML config loading, validation, CLI merge
 internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
 internal/blocklist/ Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
+internal/mitm/      Per-domain TLS interception (CA, leaf certs, HTTP proxy loop)
 internal/probe/     Management endpoints (heartbeat + stats)
 internal/stats/     In-memory counters and SQLite stats persistence
 internal/logging/   Structured logging with file rotation
@@ -207,6 +247,22 @@ fpsd.yml            Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v0.7.0 — 2026-02-16
+
+- Per-domain MITM TLS interception for content-level ad blocking (spec 006)
+- `fpsd generate-ca` subcommand creates CA certificate and private key (ECDSA P-256, 10-year validity)
+- `mitm.domains` config: explicit list of domains to intercept (exact match, case-insensitive)
+- Dynamic leaf certificate generation per domain (24h validity, in-memory cache)
+- HTTP/1.1 proxy loop through intercepted TLS connections with hop-by-hop header stripping
+- `ResponseModifier` hook for future content filtering (nil/passthrough by default)
+- `/fps/ca.pem` endpoint serves CA certificate for client installation
+- MITM stats in `/fps/stats`: `intercepts_total`, `domains_configured`, `top_intercepted`
+- Heartbeat shows `mitm_enabled` and `mitm_domains` fields
+- Startup warnings: domain in both MITM and blocklist, CA expiry within 30 days
+- Config validation for MITM domain entries (no wildcards, paths, or spaces)
+- 16 new tests: CA generation, leaf cert caching, end-to-end MITM proxy loop
+- 116 total tests (all passing)
 
 ### v0.6.0 — 2026-02-16
 

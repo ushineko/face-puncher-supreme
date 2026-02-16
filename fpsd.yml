@@ -19,25 +19,24 @@ data_dir: "."
 # Blocklist URLs — Pi-hole compatible blocklists. Comment out any you don't want.
 blocklist_urls:
   - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-  - https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-social/hosts
   - https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
   - https://urlhaus.abuse.ch/downloads/hostfile/
   - https://big.oisd.nl/
 
 # Inline blocklist — individual domains to block without needing a downloaded list.
 # These are merged with URL-sourced domains at startup.
-# blocklist:
-#   - news.iadsdk.apple.com
-#   - news-events.apple.com
-#   - news-app-events.apple.com
+blocklist:
+  - news.iadsdk.apple.com
+  - news-events.apple.com
+  - news-app-events.apple.com
 
 # Allowlist — domains that are never blocked, even if they appear in blocklists.
 # Supports exact match and suffix match (*.example.com matches all subdomains).
 # Allowlist takes priority over both URL-sourced and inline blocklist entries.
-# allowlist:
-#   - registry.api.cnn.io
-#   - cdn.optimizely.com
-#   - "*.cnn.io"
+allowlist:
+  - registry.api.cnn.io
+  - cdn.optimizely.com
+  - "*.cnn.io"
 
 # Timeouts — Go duration strings (e.g., "5s", "1m", "2m30s").
 timeouts:
@@ -49,6 +48,15 @@ timeouts:
 stats:
   enabled: true          # set to false to disable stats collection entirely
   flush_interval: "60s"  # how often in-memory counters are flushed to stats.db
+
+# MITM — per-domain TLS interception for content-level ad blocking.
+# Requires CA cert: run `fpsd generate-ca` first, then install CA on clients.
+# mitm:
+#   ca_cert: "ca-cert.pem"     # CA certificate path (relative to data_dir)
+#   ca_key: "ca-key.pem"       # CA private key path (relative to data_dir)
+#   domains:                    # Exact domains to intercept (lowercase)
+#     - www.reddit.com
+#     - old.reddit.com
 
 # Management endpoints.
 management:

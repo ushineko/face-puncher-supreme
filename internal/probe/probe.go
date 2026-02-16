@@ -32,6 +32,13 @@ type BlockData struct {
 	Sources       int
 }
 
+// MITMData holds MITM interception metadata for responses.
+type MITMData struct {
+	Enabled           bool
+	InterceptsTotal   int64
+	DomainsConfigured int
+}
+
 // TopEntry is a domain with a counter value.
 type TopEntry struct {
 	Domain string `json:"domain"`
@@ -44,6 +51,8 @@ type HeartbeatResponse struct {
 	Service       string `json:"service"`
 	Version       string `json:"version"`
 	Mode          string `json:"mode"`
+	MITMEnabled   bool   `json:"mitm_enabled"`
+	MITMDomains   int    `json:"mitm_domains"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
 	OS            string `json:"os"`
 	Arch          string `json:"arch"`
@@ -55,9 +64,18 @@ type HeartbeatResponse struct {
 type StatsResponse struct {
 	Connections ConnectionsBlock `json:"connections"`
 	Blocking    BlockingBlock    `json:"blocking"`
+	MITM        MITMBlock        `json:"mitm"`
 	Domains     DomainsBlock     `json:"domains"`
 	Clients     ClientsBlock     `json:"clients"`
 	Traffic     TrafficBlock     `json:"traffic"`
+}
+
+// MITMBlock holds MITM interception statistics.
+type MITMBlock struct {
+	Enabled           bool       `json:"enabled"`
+	InterceptsTotal   int64      `json:"intercepts_total"`
+	DomainsConfigured int        `json:"domains_configured"`
+	TopIntercepted    []TopEntry `json:"top_intercepted"`
 }
 
 // ConnectionsBlock holds real-time connection counters.
@@ -106,7 +124,7 @@ type TrafficBlock struct {
 
 // HeartbeatHandler returns an http.HandlerFunc for the heartbeat endpoint.
 // No database queries, no sorting — just reads atomics and static values.
-func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData) http.HandlerFunc {
+func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		mode := "passthrough"
 		if blockFn != nil {
@@ -115,11 +133,22 @@ func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData) http.HandlerFu
 			}
 		}
 
+		var mitmEnabled bool
+		var mitmDomains int
+		if mitmFn != nil {
+			if md := mitmFn(); md != nil {
+				mitmEnabled = md.Enabled
+				mitmDomains = md.DomainsConfigured
+			}
+		}
+
 		resp := HeartbeatResponse{
 			Status:        "ok",
 			Service:       "face-puncher-supreme",
 			Version:       version.Short(),
 			Mode:          mode,
+			MITMEnabled:   mitmEnabled,
+			MITMDomains:   mitmDomains,
 			UptimeSeconds: int64(info.Uptime().Seconds()),
 			OS:            runtime.GOOS,
 			Arch:          runtime.GOARCH,
@@ -137,6 +166,7 @@ func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData) http.HandlerFu
 type StatsProvider struct {
 	Info      ServerInfo
 	BlockFn   func() *BlockData
+	MITMFn    func() *MITMData
 	StatsDB   *stats.DB
 	Collector *stats.Collector
 }
@@ -234,6 +264,21 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 			topClients = []ClientEntry{}
 		}
 
+		// MITM stats (always from in-memory — no DB persistence for MITM yet).
+		mitmBlock := MITMBlock{}
+		if sp.MITMFn != nil {
+			if md := sp.MITMFn(); md != nil {
+				mitmBlock.Enabled = md.Enabled
+				mitmBlock.InterceptsTotal = md.InterceptsTotal
+				mitmBlock.DomainsConfigured = md.DomainsConfigured
+			}
+		}
+		topMITM := domainCountsToEntries(topN(sp.Collector.SnapshotMITMIntercepts(), n))
+		if topMITM == nil {
+			topMITM = []TopEntry{}
+		}
+		mitmBlock.TopIntercepted = topMITM
+
 		resp := StatsResponse{
 			Connections: ConnectionsBlock{
 				Total:  sp.Info.ConnectionsTotal(),
@@ -248,6 +293,7 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 				TopBlocked:       topBlocked,
 				TopAllowed:       topAllowed,
 			},
+			MITM: mitmBlock,
 			Domains: DomainsBlock{
 				TopRequested: topRequested,
 			},

@@ -18,12 +18,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/ushineko/face-puncher-supreme/internal/blocklist"
 	"github.com/ushineko/face-puncher-supreme/internal/config"
 	"github.com/ushineko/face-puncher-supreme/internal/logging"
+	"github.com/ushineko/face-puncher-supreme/internal/mitm"
 	"github.com/ushineko/face-puncher-supreme/internal/probe"
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
 	"github.com/ushineko/face-puncher-supreme/internal/stats"
@@ -38,6 +41,7 @@ var (
 	flagBlocklistURLs []string
 	flagDataDir       string
 	flagConfigPath    string
+	flagForceCA       bool
 )
 
 var rootCmd = &cobra.Command{
@@ -77,6 +81,12 @@ var configValidateCmd = &cobra.Command{
 	RunE:  runConfigValidate,
 }
 
+var generateCACmd = &cobra.Command{
+	Use:   "generate-ca",
+	Short: "Generate a CA certificate and private key for MITM interception",
+	RunE:  runGenerateCA,
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&flagConfigPath, "config", "c", "", "config file path (default: fpsd.yml in current directory)")
 	rootCmd.PersistentFlags().StringArrayVar(&flagBlocklistURLs, "blocklist-url", nil, "blocklist URL (repeatable)")
@@ -86,11 +96,14 @@ func init() {
 	rootCmd.Flags().StringVar(&flagLogDir, "log-dir", "", "directory for log files (empty to disable file logging)")
 	rootCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable verbose (DEBUG) logging")
 
+	generateCACmd.Flags().BoolVar(&flagForceCA, "force", false, "overwrite existing CA files")
+
 	configCmd.AddCommand(configDumpCmd)
 	configCmd.AddCommand(configValidateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(updateBlocklistCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(generateCACmd)
 }
 
 func main() {
@@ -193,6 +206,74 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	// Initialize stats collector (always active for in-memory counters).
 	collector := stats.NewCollector()
 
+	// Initialize MITM interceptor if domains are configured.
+	var mitmInterceptor *mitm.Interceptor
+	var caPEMHandler http.HandlerFunc
+	var mitmDataFn func() *probe.MITMData
+
+	if len(cfg.MITM.Domains) > 0 {
+		certPath := filepath.Join(cfg.DataDir, cfg.MITM.CACert)
+		keyPath := filepath.Join(cfg.DataDir, cfg.MITM.CAKey)
+
+		ca, caErr := mitm.LoadCA(certPath, keyPath)
+		if caErr != nil {
+			return fmt.Errorf("mitm: %w (run 'fpsd generate-ca' to create CA files)", caErr)
+		}
+
+		// Warn about domains in both MITM and blocklist.
+		for _, d := range cfg.MITM.Domains {
+			if bl.Size() > 0 && bl.IsBlocked(strings.ToLower(d)) {
+				logger.Warn("mitm domain is also in blocklist (will be blocked, not intercepted)",
+					"domain", d,
+				)
+			}
+		}
+
+		mitmInterceptor = mitm.NewInterceptor(&mitm.InterceptorConfig{
+			CA:             ca,
+			Domains:        cfg.MITM.Domains,
+			Logger:         logger,
+			Verbose:        cfg.Verbose,
+			ConnectTimeout: cfg.Timeouts.Connect.Duration,
+			OnMITMRequest:  collector.RecordMITMRequest,
+		})
+
+		// CA cert download handler.
+		caPEM := ca.CertPEM
+		caPEMHandler = func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/x-pem-file")
+			w.Header().Set("Content-Disposition", "attachment; filename=fps-ca.pem")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(caPEM) //nolint:gosec // best-effort response
+		}
+
+		mitmDataFn = func() *probe.MITMData {
+			return &probe.MITMData{
+				Enabled:          true,
+				InterceptsTotal:  mitmInterceptor.InterceptsTotal.Load(),
+				DomainsConfigured: mitmInterceptor.Domains(),
+			}
+		}
+
+		// Check CA expiry.
+		daysUntilExpiry := time.Until(ca.NotAfter).Hours() / 24
+		if daysUntilExpiry < 30 {
+			logger.Warn("mitm CA certificate expires soon",
+				"expires", ca.NotAfter.Format("2006-01-02"),
+				"days_remaining", int(daysUntilExpiry),
+			)
+		}
+
+		logger.Info("mitm enabled",
+			"domains", len(cfg.MITM.Domains),
+			"domain_list", cfg.MITM.Domains,
+			"ca_fingerprint", ca.Fingerprint,
+			"ca_expires", ca.NotAfter.Format("2006-01-02"),
+		)
+	} else {
+		logger.Info("mitm disabled")
+	}
+
 	// Initialize stats DB if enabled.
 	var statsDB *stats.DB
 	if cfg.Stats.Enabled {
@@ -217,22 +298,25 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		Logger:            logger,
 		Verbose:           cfg.Verbose,
 		Blocker:           blocker,
+		MITMInterceptor:   mitmInterceptor,
 		ConnectTimeout:    cfg.Timeouts.Connect.Duration,
 		ReadHeaderTimeout: cfg.Timeouts.ReadHeader.Duration,
 		ManagementPrefix:  cfg.Management.PathPrefix,
 		HeartbeatHandler:  http.NotFound, // placeholder
 		StatsHandler:      http.NotFound, // placeholder
+		CAPEMHandler:      caPEMHandler,
 		OnRequest:         collector.RecordRequest,
 		OnTunnelClose:     collector.RecordBytes,
 	})
 
 	// Now build real handlers with the actual ServerInfo (srv).
-	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn)
+	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn)
 	var statsHandler http.HandlerFunc
 	if cfg.Stats.Enabled {
 		statsHandler = probe.StatsHandler(&probe.StatsProvider{
 			Info:      srv,
 			BlockFn:   blockDataFn,
+			MITMFn:    mitmDataFn,
 			StatsDB:   statsDB,
 			Collector: collector,
 		})
@@ -342,6 +426,25 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("config: valid")
+	return nil
+}
+
+func runGenerateCA(cmd *cobra.Command, _ []string) error {
+	cfg, err := loadConfig(cmd)
+	if err != nil {
+		return err
+	}
+
+	certPath := filepath.Join(cfg.DataDir, cfg.MITM.CACert)
+	keyPath := filepath.Join(cfg.DataDir, cfg.MITM.CAKey)
+
+	if err := mitm.GenerateCA(certPath, keyPath, flagForceCA); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "CA certificate: %s\n", certPath)
+	fmt.Fprintf(os.Stderr, "CA private key: %s\n", keyPath)
+	fmt.Fprintln(os.Stderr, "Install the CA certificate on client devices to enable MITM interception.")
 	return nil
 }
 

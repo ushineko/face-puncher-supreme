@@ -26,6 +26,13 @@ type Blocker interface {
 	IsBlocked(domain string) bool
 }
 
+// MITMInterceptor checks whether a domain should be MITM'd and handles
+// the interception session.
+type MITMInterceptor interface {
+	IsMITMDomain(domain string) bool
+	Handle(clientConn net.Conn, domain, host, clientIP string)
+}
+
 // Server is an HTTP/HTTPS forward proxy.
 type Server struct {
 	httpServer       *http.Server
@@ -33,12 +40,14 @@ type Server struct {
 	verbose          bool
 	startTime        time.Time
 	blocker          Blocker
+	mitmInterceptor  MITMInterceptor
 	connectTimeout   time.Duration
 	managementPrefix string
 
 	// Management endpoint handlers (set during construction).
 	heartbeatHandler http.HandlerFunc
 	statsHandler     http.HandlerFunc
+	caPEMHandler     http.HandlerFunc
 
 	// Stats callbacks.
 	onRequest     func(clientIP, domain string, blocked bool, bytesIn, bytesOut int64)
@@ -62,6 +71,8 @@ type Config struct {
 	Verbose bool
 	// Blocker checks domains against a blocklist. If nil, no blocking is performed.
 	Blocker Blocker
+	// MITMInterceptor handles MITM interception for configured domains. If nil, MITM is disabled.
+	MITMInterceptor MITMInterceptor
 	// ConnectTimeout is the timeout for upstream TCP connections. Zero uses the default (10s).
 	ConnectTimeout time.Duration
 	// ReadHeaderTimeout is the timeout for reading client request headers. Zero uses the default (10s).
@@ -72,6 +83,8 @@ type Config struct {
 	HeartbeatHandler http.HandlerFunc
 	// StatsHandler handles /fps/stats requests. Required.
 	StatsHandler http.HandlerFunc
+	// CAPEMHandler handles /fps/ca.pem requests. If nil, returns 404.
+	CAPEMHandler http.HandlerFunc
 	// OnRequest is called after each request completes. Used to record stats.
 	// Parameters: clientIP, domain, blocked, bytesIn, bytesOut.
 	OnRequest func(clientIP, domain string, blocked bool, bytesIn, bytesOut int64)
@@ -106,10 +119,12 @@ func New(cfg *Config) *Server {
 		verbose:          cfg.Verbose,
 		startTime:        time.Now(),
 		blocker:          cfg.Blocker,
+		mitmInterceptor:  cfg.MITMInterceptor,
 		connectTimeout:   connectTimeout,
 		managementPrefix: mgmtPrefix,
 		heartbeatHandler: cfg.HeartbeatHandler,
 		statsHandler:     cfg.StatsHandler,
+		caPEMHandler:     cfg.CAPEMHandler,
 		onRequest:        cfg.OnRequest,
 		onTunnelClose:    cfg.OnTunnelClose,
 	}
@@ -281,6 +296,30 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// MITM interception: hijack the connection and delegate to the interceptor.
+	if s.mitmInterceptor != nil && s.mitmInterceptor.IsMITMDomain(domain) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+			return
+		}
+		clientConn, _, err := hijacker.Hijack()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("hijack error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		// Send 200 Connection Established before starting TLS.
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")) //nolint:gosec // best-effort
+
+		if s.onRequest != nil {
+			s.onRequest(clientIP, domain, false, 0, 0)
+		}
+
+		// Handle takes ownership of clientConn (closes it when done).
+		go s.mitmInterceptor.Handle(clientConn, domain, r.Host, clientIP)
+		return
+	}
+
 	destConn, err := net.DialTimeout("tcp", r.Host, s.connectTimeout)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel error: %v", err), http.StatusBadGateway)
@@ -395,6 +434,11 @@ func (s *Server) StartedAt() time.Time {
 func (s *Server) SetHandlers(heartbeat, stats http.HandlerFunc) {
 	s.heartbeatHandler = heartbeat
 	s.statsHandler = stats
+}
+
+// SetCAPEMHandler sets the handler for the /fps/ca.pem endpoint.
+func (s *Server) SetCAPEMHandler(handler http.HandlerFunc) {
+	s.caPEMHandler = handler
 }
 
 // hopByHopHeaders are headers that apply to a single transport-level

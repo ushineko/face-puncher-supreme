@@ -29,9 +29,17 @@ type Config struct {
 	BlocklistURLs []string   `yaml:"blocklist_urls"`
 	Blocklist     []string   `yaml:"blocklist"`
 	Allowlist     []string   `yaml:"allowlist"`
+	MITM          MITM       `yaml:"mitm"`
 	Timeouts      Timeouts   `yaml:"timeouts"`
 	Management    Management `yaml:"management"`
 	Stats         Stats      `yaml:"stats"`
+}
+
+// MITM holds per-domain TLS interception configuration.
+type MITM struct {
+	CACert  string   `yaml:"ca_cert"`
+	CAKey   string   `yaml:"ca_key"`
+	Domains []string `yaml:"domains"`
 }
 
 // Timeouts holds proxy timeout configuration.
@@ -59,6 +67,10 @@ func Default() Config {
 		LogDir:  "logs",
 		Verbose: false,
 		DataDir: ".",
+		MITM: MITM{
+			CACert: "ca-cert.pem",
+			CAKey:  "ca-key.pem",
+		},
 		Timeouts: Timeouts{
 			Shutdown:   Duration{5 * time.Second},
 			Connect:    Duration{10 * time.Second},
@@ -152,6 +164,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, validateBlocklistURLs(c.BlocklistURLs)...)
 	errs = append(errs, validateBlocklist(c.Blocklist)...)
 	errs = append(errs, validateAllowlist(c.Allowlist)...)
+	errs = append(errs, validateMITM(c.MITM)...)
 
 	// Durations must be positive.
 	if c.Timeouts.Shutdown.Duration <= 0 {
@@ -223,6 +236,17 @@ func validateAllowlist(entries []string) []string {
 			}
 		case strings.Contains(entry, "*"):
 			errs = append(errs, fmt.Sprintf("allowlist[%d]: wildcard must be prefix *.domain, got %q", i, entry))
+		}
+	}
+	return errs
+}
+
+// validateMITM checks that MITM domain entries are valid domain names.
+func validateMITM(m MITM) []string {
+	var errs []string
+	for i, d := range m.Domains {
+		if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {
+			errs = append(errs, fmt.Sprintf("mitm.domains[%d]: invalid domain %q", i, d))
 		}
 	}
 	return errs

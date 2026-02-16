@@ -32,6 +32,9 @@ type Collector struct {
 
 	// Per-domain block counts.
 	domainBlocks sync.Map // string -> *atomic.Int64
+
+	// Per-domain MITM intercept counts.
+	mitmIntercepts sync.Map // string -> *atomic.Int64
 }
 
 // NewCollector creates a new in-memory stats collector.
@@ -69,6 +72,36 @@ func (c *Collector) RecordBytes(clientIP string, bytesIn, bytesOut int64) {
 	cs, _ := val.(*clientStats) //nolint:errcheck // type is guaranteed by LoadOrStore
 	cs.BytesIn.Add(bytesIn)
 	cs.BytesOut.Add(bytesOut)
+}
+
+// RecordMITMRequest records an HTTP request-response cycle through a MITM session.
+// clientIP is accepted for future per-client MITM tracking.
+func (c *Collector) RecordMITMRequest(_, domain string) {
+	mv, _ := c.mitmIntercepts.LoadOrStore(domain, &atomic.Int64{})
+	mv.(*atomic.Int64).Add(1) //nolint:errcheck // type is guaranteed by LoadOrStore
+}
+
+// SnapshotMITMIntercepts returns current per-domain MITM intercept counts.
+func (c *Collector) SnapshotMITMIntercepts() []DomainCount {
+	var out []DomainCount
+	c.mitmIntercepts.Range(func(key, value any) bool {
+		domain, _ := key.(string)           //nolint:errcheck // type is guaranteed
+		counter, _ := value.(*atomic.Int64) //nolint:errcheck // type is guaranteed
+		out = append(out, DomainCount{Domain: domain, Count: counter.Load()})
+		return true
+	})
+	return out
+}
+
+// TotalMITMIntercepts returns the sum of all MITM intercept counts.
+func (c *Collector) TotalMITMIntercepts() int64 {
+	var total int64
+	c.mitmIntercepts.Range(func(_, value any) bool {
+		counter, _ := value.(*atomic.Int64) //nolint:errcheck // type is guaranteed
+		total += counter.Load()
+		return true
+	})
+	return total
 }
 
 // ClientSnapshot captures a point-in-time view of per-client counters.
