@@ -1,6 +1,6 @@
 ## Validation Report: Spec 004 — Database-Backed Statistics
 **Date**: 2026-02-16 22:00
-**Commit**: (pending)
+**Commit**: 7344d28
 **Status**: PASSED
 
 ### Phase 3: Tests
