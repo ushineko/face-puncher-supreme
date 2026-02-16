@@ -14,7 +14,7 @@ import (
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
-	assert.Equal(t, ":8080", cfg.Listen)
+	assert.Equal(t, ":18737", cfg.Listen)
 	assert.Equal(t, "logs", cfg.LogDir)
 	assert.False(t, cfg.Verbose)
 	assert.Equal(t, ".", cfg.DataDir)

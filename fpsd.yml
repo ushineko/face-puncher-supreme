@@ -4,8 +4,8 @@
 # CLI flags override config file values when both are specified.
 
 # Network — listen address in host:port format.
-# Use "0.0.0.0:8080" to accept connections from other devices on the LAN.
-listen: ":8080"
+# Use "0.0.0.0:18737" to accept connections from other devices on the LAN.
+listen: ":18737"
 
 # Logging — directory for rotated log files. Set to "" to disable file logging.
 log_dir: "logs"

@@ -64,7 +64,7 @@ CLI flags override config file values. If no config file exists, the proxy start
 Configure your browser or system to use `http://<host>:<port>` as an HTTP/HTTPS proxy. For Chromium:
 
 ```bash
-chromium --proxy-server="http://127.0.0.1:8080"
+chromium --proxy-server="http://127.0.0.1:18737"
 ```
 
 ## CLI Flags
@@ -72,7 +72,7 @@ chromium --proxy-server="http://127.0.0.1:8080"
 | Flag | Short | Default | Description |
 | ---- | ----- | ------- | ----------- |
 | `--config` | `-c` | (auto-discover) | Config file path (`fpsd.yml` / `fpsd.yaml` in CWD) |
-| `--addr` | `-a` | `:8080` | Listen address (host:port) |
+| `--addr` | `-a` | `:18737` | Listen address (host:port) |
 | `--log-dir` | | `logs` | Directory for log files (empty to disable) |
 | `--verbose` | `-v` | `false` | Enable DEBUG-level logging with full request/response detail |
 | `--blocklist-url` | | | Blocklist URL (repeatable, same format as Pi-hole adlists) |
@@ -112,7 +112,7 @@ With no blocklist URLs (neither in config file nor via `--blocklist-url` flags),
 Verify the proxy is running:
 
 ```bash
-curl -s http://localhost:8080/fps/probe | python3 -m json.tool
+curl -s http://localhost:18737/fps/probe | python3 -m json.tool
 ```
 
 Returns JSON with status, version, mode, uptime, connection counters, and block statistics (`blocks_total`, `blocklist_size`, `blocklist_sources`, `top_blocked`).

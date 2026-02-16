@@ -28,7 +28,7 @@ If no config file is found and no `--config` flag was given, the proxy starts wi
 # fpsd.yml — Face Puncher Supreme configuration
 
 # Network
-listen: "0.0.0.0:8080"
+listen: "0.0.0.0:18737"
 
 # Logging
 log_dir: "logs"
@@ -58,7 +58,7 @@ management:
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `listen` | string | `":8080"` | Listen address in host:port format |
+| `listen` | string | `":18737"` | Listen address in host:port format |
 | `log_dir` | string | `"logs"` | Directory for rotated log files (empty string disables file logging) |
 | `verbose` | bool | `false` | Enable DEBUG-level logging |
 | `data_dir` | string | `"."` | Directory for persistent data (blocklist.db, stats.db) |
@@ -79,7 +79,7 @@ Resolution order (highest priority first):
 2. Config file value
 3. Built-in default
 
-Example: `fpsd --addr :9090 -c fpsd.yml` uses port 9090 even if the config file says `listen: ":8080"`.
+Example: `fpsd --addr :9090 -c fpsd.yml` uses port 9090 even if the config file says `listen: ":18737"`.
 
 ### Flag Changes
 

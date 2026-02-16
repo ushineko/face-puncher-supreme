@@ -12,7 +12,7 @@ This document is a communication channel between the Linux development environme
 | ----- | ----- |
 | Version | 0.4.0 |
 | Binary | `fpsd` (Go, Linux amd64) |
-| Default listen | `:8080` |
+| Default listen | `:18737` |
 | Config file | `fpsd.yml` (auto-discovered in working directory) |
 | Mode | Domain blocking (Pi-hole compatible blocklists) |
 | Blocklist domains | ~376,000 (5 sources) |
@@ -37,7 +37,7 @@ make build
 ./fpsd
 
 # With LAN-accessible binding (for macOS/iOS testing):
-./fpsd --addr 0.0.0.0:8080
+./fpsd --addr 0.0.0.0:18737
 
 # Update blocklists without starting proxy:
 ./fpsd update-blocklist
@@ -292,7 +292,7 @@ Browsers installed:
 
    ```bash
    # On Linux:
-   ./fpsd --addr 0.0.0.0:8080
+   ./fpsd --addr 0.0.0.0:18737
    ```
 
 2. On macOS, verify the proxy is reachable:
@@ -408,7 +408,7 @@ Findings:
 ## Notes
 
 - The proxy is built and verified on Linux with Chromium (v0.4.0). The macOS side needs to fill in environment info (Task 001) and then test with the proxy running on the Linux machine.
-- The proxy must bind to `0.0.0.0` (not localhost) for LAN access: `./fpsd --addr 0.0.0.0:8080`
+- The proxy must bind to `0.0.0.0` (not localhost) for LAN access: `./fpsd --addr 0.0.0.0:18737`
 - Both machines must be on the same network. Check firewall rules if the probe endpoint isn't reachable.
 - Do NOT install custom CA certificates until explicitly instructed. Domain blocking works at the CONNECT level — we see the domain name and block before the TLS handshake, but cannot inspect encrypted content.
 - Current blocking is domain-level only. Ads served from the same domain as content (e.g., Apple's own ad infrastructure) will NOT be blocked by this approach. That's the next phase (content inspection with MITM).

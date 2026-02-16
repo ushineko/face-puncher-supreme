@@ -49,7 +49,7 @@ type Server struct {
 
 // Config holds proxy server configuration.
 type Config struct {
-	// ListenAddr is the address to listen on (e.g., ":8080" or "0.0.0.0:8080").
+	// ListenAddr is the address to listen on (e.g., ":18737" or "0.0.0.0:18737").
 	ListenAddr string
 	// Logger is the structured logger to use. If nil, a default is created.
 	Logger *slog.Logger

@@ -46,7 +46,7 @@ type Management struct {
 // Default returns a Config populated with built-in defaults.
 func Default() Config {
 	return Config{
-		Listen:  ":8080",
+		Listen:  ":18737",
 		LogDir:  "logs",
 		Verbose: false,
 		DataDir: ".",
