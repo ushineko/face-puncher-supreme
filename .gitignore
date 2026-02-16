@@ -4,3 +4,11 @@ coverage.out
 coverage.html
 logs/
 stats.db
+blocklist.db
+
+# MITM CA credentials — never commit private keys
+ca-cert.pem
+ca-key.pem
+
+# Interception capture data
+intercepts/
