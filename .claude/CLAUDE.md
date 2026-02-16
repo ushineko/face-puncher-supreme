@@ -36,6 +36,7 @@ No rules relaxed from defaults. All categories kept at strict.
 - **Cross-system testing**: This project uses a macOS agent guide (`agents/macos-agent-guide.md`) to coordinate testing between the Linux dev environment and a macOS/iOS test system. Behavioral claims about Apple apps must be verified via live testing, not assumed from web research.
 - **Probe endpoint**: The proxy reserves the `/fps/` URL path prefix for management endpoints. These are never forwarded upstream.
 - **Lint gate**: Always run `make lint` (golangci-lint) after editing Go code. Lint must pass before committing, alongside tests and code quality checks. This is part of every validation pass.
+- **No Co-Authored-By lines**: Never add `Co-Authored-By` trailers anywhere — not in commit messages, changelogs, READMEs, validation reports, specs, or any other file.
 
 ---
 
