@@ -32,6 +32,15 @@ This document is a communication channel between the Linux development environme
 - MITM TLS interception for configured domains (Reddit)
 - Reddit promotions filter plugin active
 
+### Verified Working (iPhone 17 Pro Max, iOS 26.2.1)
+
+- Apple News ad blocking: no ads visible
+- Safari browsing: YouTube and other sites functional, no breakage
+- MITM TLS interception: Reddit loads without errors after CA trust
+- Reddit promotions filter: active and working
+- .local hostname resolution: works (no raw IP needed)
+- Setup friction: iOS cert trust flow is multi-step (download, install profile, enable trust separately)
+
 ### Verified Working (macOS 26.3 + Safari)
 
 - Domain blocking: Apple News ads suppressed (`news.iadsdk.apple.com` blocked)
@@ -167,34 +176,167 @@ Current proxy config: HTTP+HTTPS proxy on USB 10/100/1000 LAN → njv-cachyos.lo
 
 ---
 
-### Task 003: iOS Device Proxy Configuration
+### Task 003: iPhone Testing (Full Stack)
 
-**Status**: BLOCKED (no iOS device connected)
-**Priority**: Medium
-**Context**: If iOS devices are available, we want to test Apple News on iOS through the proxy. iOS Apple News may behave differently from macOS regarding proxy obedience. The proxy is running and reachable at `njv-cachyos.local:18737`.
+**Status**: COMPLETE
+**Priority**: High
+**Context**: The proxy is fully verified on macOS (domain blocking, allowlist, MITM, content filtering). This task validates the full stack on an iPhone. iOS Apple News may behave differently from macOS regarding proxy obedience, QUIC fallback, and certificate trust. The proxy must be running on the Linux machine at `njv-cachyos.local:18737` with `--addr 0.0.0.0:18737`.
 
-1. From the iOS device's browser, verify the proxy is reachable:
-   - Open Safari and navigate to `http://njv-cachyos.local:18737/fps/heartbeat`
-   - Expected: JSON with `"status": "ok"`, `"mode": "blocking"`.
+#### Prerequisites
 
-2. Check `http://njv-cachyos.local:18737/fps/stats` and note `connections.total` and `blocking.blocks_total` (baseline).
+- Proxy running on Linux with LAN binding (`./fpsd --addr 0.0.0.0:18737`)
+- iPhone on the same Wi-Fi network as the proxy host
+- iPhone unlocked with passcode available (needed for certificate trust)
 
-3. Configure the iOS device to use the proxy:
-   - Settings > Wi-Fi > (i) on connected network > Configure Proxy > Manual
-   - Server: `njv-cachyos.local`, Port: `18737`
+#### Part 1: Connectivity Check (Before Proxy)
 
-4. Run the same tests as Task 005 (Apple News, Safari on news sites, general browsing).
+1. **Confirm network**: On the iPhone, go to Settings > Wi-Fi. Note the connected network name. It must be the same LAN as `njv-cachyos.local`.
 
-5. Check the stats again from Safari (`http://njv-cachyos.local:18737/fps/stats`) and note the new `connections.total` and `blocking.blocks_total`.
+2. **Test reachability**: Open Safari on the iPhone and navigate to:
+   ```
+   http://njv-cachyos.local:18737/fps/heartbeat
+   ```
+   Expected: JSON with `"status": "ok"`. If this fails, the proxy is not reachable — check firewall rules on the Linux host and confirm both devices are on the same subnet.
 
-6. Disable the proxy on the iOS device:
-   - Settings > Wi-Fi > (i) on connected network > Configure Proxy > Off
+3. **Record baseline stats**: Navigate to:
+   ```
+   http://njv-cachyos.local:18737/fps/stats
+   ```
+   Note `connections.total` and `blocking.blocks_total` for comparison later.
 
-7. Document findings in Results. Key questions:
-   - Does iOS Apple News route traffic through the configured proxy?
-   - Are ad domains blocked on iOS?
-   - Does Apple News still function with blocking active?
-   - Are ads visibly reduced?
+#### Part 2: CA Certificate Installation
+
+The CA certificate is required for MITM interception (Reddit). Domain-level blocking works without it, so if certificate installation is skipped, test only the domain blocking sections.
+
+4. **Download the CA cert**: In Safari on the iPhone, navigate to:
+   ```
+   http://njv-cachyos.local:18737/fps/ca.pem
+   ```
+   Safari will prompt: "This website is trying to download a configuration profile. Do you want to allow this?" Tap **Allow**.
+
+5. **Install the profile**:
+   - Go to Settings > General > VPN & Device Management (or "Profiles & Device Management" on older iOS)
+   - The "Face Puncher Supreme CA" profile should appear under "Downloaded Profile"
+   - Tap it, then tap **Install** (top right)
+   - Enter the device passcode when prompted
+   - Tap **Install** again on the warning screen, then **Done**
+
+6. **Enable full trust for the CA**:
+   - Go to Settings > General > About > Certificate Trust Settings
+   - Under "Enable full trust for root certificates", toggle ON **Face Puncher Supreme CA**
+   - Tap **Continue** on the warning dialog
+
+7. **Verify**: The certificate should now show as trusted. If this step is skipped, MITM connections will fail with TLS errors (expected — iOS enforces certificate validation strictly).
+
+#### Part 3: Proxy Configuration
+
+8. **Configure the proxy**:
+   - Settings > Wi-Fi > tap the (i) icon on the connected network
+   - Scroll down to "HTTP Proxy" (or "Configure Proxy")
+   - Select **Manual**
+   - Server: `njv-cachyos.local`
+   - Port: `18737`
+   - Authentication: OFF
+   - Tap **Save** (top right)
+
+9. **Verify proxy is active**: Open Safari and navigate to:
+   ```
+   http://njv-cachyos.local:18737/fps/heartbeat
+   ```
+   This should still work. If it fails, the proxy configuration may be incorrect.
+
+#### Part 4: Domain Blocking Tests
+
+10. **Test A — Apple News ad blocking**:
+    - Open the Apple News app
+    - Browse articles from several publishers for 2-3 minutes
+    - Scroll through the Today feed
+    - **Key question**: Are ads visible? On macOS, `news.iadsdk.apple.com` gets blocked and ads disappear entirely
+    - Note: iOS News may use QUIC/HTTP3 for some traffic (bypasses TCP proxy). If ads still appear, this is a significant finding — it means iOS News routes ad traffic differently than macOS News
+
+11. **Test B — Safari browsing (news sites)**:
+    - Visit: CNN, Reuters, Yahoo News, Apple.com
+    - Pages should load correctly (allowlist covers these)
+    - Note any missing content, broken layouts, or slow loading
+    - Compare experience to normal browsing — allowlist should prevent over-blocking
+
+12. **Test C — Safari browsing (other sites)**:
+    - Visit: YouTube, Amazon, Wikipedia, GitHub
+    - Note any breakage or missing content
+    - These sites should work normally through the proxy
+
+13. **Test D — Blocked domain verification**:
+    - Navigate to a known blocked domain in Safari (e.g., `http://doubleclick.net`)
+    - Expected: connection refused or proxy error page (403)
+    - This confirms domain blocking is active
+
+#### Part 5: MITM + Content Filtering Tests
+
+These tests require the CA certificate to be installed and trusted (Part 2).
+
+14. **Test E — Reddit through MITM**:
+    - Open Safari and navigate to `https://www.reddit.com`
+    - The page should load without TLS errors (green lock / no warnings)
+    - Browse the front page and a few subreddits
+    - **Key question**: Do promoted posts appear? On macOS, the reddit-promotions plugin filters them out
+    - Try `https://old.reddit.com` as well
+
+15. **Test F — MITM scope verification**:
+    - Visit `https://www.apple.com` (not in MITM domain list)
+    - Check the certificate: tap the lock icon in Safari's address bar
+    - The certificate should be from Apple (Digicert or similar), NOT Face Puncher Supreme CA
+    - This confirms MITM is scoped to configured domains only
+
+#### Part 6: Stats and Cleanup
+
+16. **Check final stats**: In Safari, navigate to:
+    ```
+    http://njv-cachyos.local:18737/fps/stats
+    ```
+    Record:
+    - `connections.total` (compare to baseline from step 3)
+    - `blocking.blocks_total`
+    - `blocking.domains` — top blocked domains (look for `news.iadsdk.apple.com`)
+    - `clients` — the iPhone should appear as a client entry
+
+17. **Check the dashboard** (optional):
+    ```
+    http://njv-cachyos.local:18737/fps/dashboard/
+    ```
+    Verify the iPhone's traffic appears in the live view.
+
+18. **Disable the proxy**:
+    - Settings > Wi-Fi > tap (i) on the connected network
+    - HTTP Proxy > select **Off**
+    - Tap **Save**
+
+19. **Optionally remove the CA cert** (if not needed for future testing):
+    - Settings > General > VPN & Device Management
+    - Tap "Face Puncher Supreme CA" > **Remove Profile**
+    - Or: Settings > General > About > Certificate Trust Settings > toggle OFF
+
+#### Part 7: Report
+
+Document findings in the Results section. Key questions to answer:
+
+| Question | Expected | Notes |
+|----------|----------|-------|
+| Does iOS Apple News route ad traffic through the proxy? | Yes (matches macOS) | If no, QUIC/HTTP3 may bypass the proxy |
+| Are `news.iadsdk.apple.com` blocks visible in stats? | Yes | Compare to macOS (108 blocks in 5 min) |
+| Are ads visibly reduced in Apple News? | Yes | User perception matters |
+| Does Apple News still function with blocking active? | Yes | Content should be unaffected |
+| Does Safari work on allowlisted sites? | Yes | CNN, Reuters, Yahoo, YouTube |
+| Does Reddit load through MITM without TLS errors? | Yes | Requires CA trust |
+| Are Reddit promoted posts filtered? | Yes | Content filtering plugin |
+| Is MITM scoped correctly (non-MITM sites show original certs)? | Yes | Check apple.com cert |
+| Any iOS-specific breakage not seen on macOS? | Document | Certificate pinning, HTTP/3, etc. |
+| Does the iPhone appear in proxy stats as a client? | Yes | Check `/fps/stats` |
+
+Also note:
+- iPhone model and iOS version
+- Any apps that stop working with the proxy enabled (certificate pinning)
+- Whether `.local` hostname resolution works or if a raw IP is needed
+- Approximate block rate compared to macOS testing
 
 ---
 
@@ -229,12 +371,19 @@ v0.9.0 Testing (MITM + Reddit promotions filter):
 - Full stack verified: domain blocking + allowlist + MITM + content filtering
 ```
 
-### Result for Task 003: iOS Device Proxy
+### Result for Task 003: iPhone Testing (Full Stack)
 
 ```text
-Status: SKIPPED
+Status: COMPLETE
 Date: 2026-02-16
-Findings: No iOS device connected during testing. Task remains available.
+Device: iPhone 17 Pro Max, iOS 26.2.1
+
+Apple News ad blocking: WORKS — no ads visible during browsing
+Reddit MITM: WORKS — no TLS errors after CA cert installed and trusted, ad blocking active
+Safari browsing: No breakage observed (YouTube and other sites tested)
+Certificate setup: Painful (download profile, install profile, enable trust separately) but functional
+.local hostname: Resolved successfully (no raw IP needed)
+Overall: Full stack verified on iOS — domain blocking, MITM, content filtering all working
 ```
 
 ---
@@ -270,9 +419,9 @@ Combined results with Task 004. Key findings:
 - False positives: `registry.api.cnn.io` (66, CNN content API), `cdn.optimizely.com` (72, A/B testing), `api.rlcdn.com` (64)
 - 93.7% block rate is too aggressive for general browsing
 
-### Task 003: iOS Device Proxy (SKIPPED, 2026-02-16)
+### Task 003: iPhone Testing (Full Stack) (COMPLETE, 2026-02-16)
 
-No iOS device connected during testing. Task carried forward.
+iPhone 17 Pro Max, iOS 26.2.1. Full stack verified: domain blocking (Apple News ads removed), MITM (Reddit, no TLS errors), content filtering (promotions filtered), Safari browsing (no breakage). Setup painful due to iOS cert trust flow but functional. mDNS .local resolution worked.
 
 ### Task 004: Apple News Internal Behavior (COMPLETE, 2026-02-16)
 
