@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../src";
 
 @theme {
   --color-vsc-bg: #1e1e1e;

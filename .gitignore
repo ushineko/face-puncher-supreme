@@ -19,6 +19,6 @@ web/ui/dist/
 
 # Arch packaging artifacts (makepkg)
 *.pkg.tar.zst
-pkg/
-src/
+/pkg/
+/src/
 .aur-repo/

@@ -511,6 +511,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.2.2 — 2026-02-17
+
+- fix: dashboard styles missing — add explicit `@source` directive for Tailwind v4.1.18 content detection
+
 ### v1.2.1 — 2026-02-17
 
 - fps-ctl: automatic migration from fps-ctl to package-managed service — cleans up stale unit file and binary that shadow the package install
