@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface MarkdownProps {
   content: string;
@@ -8,6 +9,7 @@ export default function Markdown({ content }: MarkdownProps) {
   return (
     <div className="prose-vsc">
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
             <h1 className="text-xl text-vsc-text font-bold mt-6 mb-3 border-b border-vsc-border pb-2">
