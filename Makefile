@@ -1,7 +1,7 @@
 .PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint install uninstall
 
 BINARY := fpsd
-VERSION := 1.3.2
+VERSION := 1.3.3
 COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/ushineko/face-puncher-supreme/internal/version

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useMemo } from "react";
+import { useRef, useCallback, useMemo, useState, useEffect } from "react";
 import { useSocket } from "../hooks/useSocket";
 import { useLayout } from "../hooks/useLayout";
 import StatCard, { StatRow } from "../components/StatCard";
@@ -118,25 +118,20 @@ export default function Stats() {
 
   const layout = useLayout();
 
-  // Rolling time-series for the traffic line chart
-  const trafficHistory = useRef<TimePoint[]>([]);
-  if (stats) {
-    const now = Date.now();
-    const hist = trafficHistory.current;
-    // Compute instantaneous rate from the last two stats pushes
-    const prev = hist.length > 0 ? hist[hist.length - 1] : null;
-    let rate = 0;
-    if (prev) {
-      const dt = (now - prev.time) / 1000;
-      if (dt > 0) {
-        // We store the total_requests as value in history, but for the chart
-        // we want req/sec. Recompute from the rate string for consistency.
-        rate = parseFloat(reqRate);
-      }
-    }
-    hist.push({ time: now, value: rate });
-    if (hist.length > MAX_HISTORY) hist.splice(0, hist.length - MAX_HISTORY);
-  }
+  // Rolling time-series for the traffic line chart.
+  // Must use useState (not useRef) so LineChart receives a new array reference
+  // on each update — otherwise the canvas draw effect never re-fires.
+  const [trafficHistory, setTrafficHistory] = useState<TimePoint[]>([]);
+  useEffect(() => {
+    if (!stats) return;
+    setTrafficHistory((prev) => {
+      const rate = parseFloat(reqRate);
+      const next = [...prev, { time: Date.now(), value: rate }];
+      return next.length > MAX_HISTORY
+        ? next.slice(next.length - MAX_HISTORY)
+        : next;
+    });
+  }, [stats, reqRate]);
 
   // Build card renderers keyed by section ID
   const cardRenderers: Record<string, () => React.ReactNode> = useMemo(
@@ -303,7 +298,7 @@ export default function Stats() {
   const cardCharts: Record<string, React.ReactNode> = {
     traffic: (
       <LineChart
-        data={trafficHistory.current}
+        data={trafficHistory}
         label="req/sec"
       />
     ),

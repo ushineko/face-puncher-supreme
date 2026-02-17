@@ -521,6 +521,11 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.3 — 2026-02-17
+
+- fix: traffic line graph now updates in real time when chart visibility is restored from localStorage on first load (was stuck on "Collecting data...")
+- fix: plugin stats (inspected/matched/modified/top rules) now report correctly in the dashboard — `RecordPluginInspected` was never being called, leaving the stats snapshot empty
+
 ### v1.3.2 — 2026-02-17
 
 - ci: split workflows into ci.yml (branch/PR) and release.yml (tags) to fix GitHub Actions deduplication

@@ -668,9 +668,15 @@ func initPlugins(
 	}
 
 	// Wire response modifier into MITM interceptor.
-	modifier := plugin.BuildResponseModifier(results, func(pluginName, rule string, modified bool, removed int) {
-		collector.RecordPluginMatch(pluginName, rule, modified, removed)
-	}, logger)
+	modifier := plugin.BuildResponseModifier(results,
+		func(pluginName string) {
+			collector.RecordPluginInspected(pluginName)
+		},
+		func(pluginName, rule string, modified bool, removed int) {
+			collector.RecordPluginMatch(pluginName, rule, modified, removed)
+		},
+		logger,
+	)
 	if modifier != nil {
 		mitmInterceptor.ResponseModifier = modifier
 	}

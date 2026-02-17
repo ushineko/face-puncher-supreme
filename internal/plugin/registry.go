@@ -25,6 +25,10 @@ type PluginStats struct {
 	RuleCounts map[string]int64
 }
 
+// OnPluginInspect is called by the response modifier when a response is
+// dispatched to a plugin for inspection (before the filter runs).
+type OnPluginInspect func(pluginName string)
+
 // OnFilterMatch is called by the response modifier when a plugin matches.
 // Parameters: pluginName, rule, modified (whether body was changed), removed count.
 type OnFilterMatch func(pluginName, rule string, modified bool, removed int)
@@ -133,6 +137,7 @@ func InitPlugins(
 // their Filter() method.
 func BuildResponseModifier(
 	results []InitResult,
+	onInspect OnPluginInspect,
 	onMatch OnFilterMatch,
 	logger *slog.Logger,
 ) mitm.ResponseModifier {
@@ -160,6 +165,10 @@ func BuildResponseModifier(
 		e, ok := lookup[strings.ToLower(domain)]
 		if !ok {
 			return body, nil
+		}
+
+		if onInspect != nil {
+			onInspect(e.plugin.Name())
 		}
 
 		modified, result, err := e.plugin.Filter(req, resp, body)

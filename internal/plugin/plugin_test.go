@@ -252,7 +252,7 @@ func TestInitPluginsConfigDomainOverride(t *testing.T) {
 
 func TestBuildResponseModifierEmpty(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mod := BuildResponseModifier(nil, nil, logger)
+	mod := BuildResponseModifier(nil, nil, nil, logger)
 	assert.Nil(t, mod)
 }
 
@@ -277,6 +277,12 @@ func TestBuildResponseModifierDispatch(t *testing.T) {
 		},
 	}}
 
+	var inspectCalled bool
+	onInspect := func(name string) {
+		inspectCalled = true
+		assert.Equal(t, "test", name)
+	}
+
 	var matchCalled bool
 	onMatch := func(name, rule string, modified bool, removed int) {
 		matchCalled = true
@@ -287,7 +293,7 @@ func TestBuildResponseModifierDispatch(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mod := BuildResponseModifier(results, onMatch, logger)
+	mod := BuildResponseModifier(results, onInspect, onMatch, logger)
 	require.NotNil(t, mod)
 
 	req := &http.Request{URL: &url.URL{Path: "/test"}, Method: "GET"}
@@ -295,6 +301,7 @@ func TestBuildResponseModifierDispatch(t *testing.T) {
 	body, err := mod("example.com", req, resp, []byte("original"))
 	require.NoError(t, err)
 	assert.Equal(t, "modified", string(body))
+	assert.True(t, inspectCalled)
 	assert.True(t, matchCalled)
 }
 
@@ -315,17 +322,23 @@ func TestBuildResponseModifierNoMatchPassthrough(t *testing.T) {
 		},
 	}}
 
+	var inspectCalled bool
+	onInspect := func(_ string) {
+		inspectCalled = true
+	}
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mod := BuildResponseModifier(results, nil, logger)
+	mod := BuildResponseModifier(results, onInspect, nil, logger)
 	require.NotNil(t, mod)
 
 	req := &http.Request{URL: &url.URL{Path: "/test"}, Method: "GET"}
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}}
 
-	// Unknown domain: passthrough.
+	// Unknown domain: passthrough — onInspect should NOT be called.
 	body, err := mod("other.com", req, resp, []byte("original"))
 	require.NoError(t, err)
 	assert.Equal(t, "original", string(body))
+	assert.False(t, inspectCalled, "onInspect should not be called for unknown domains")
 }
 
 // --- Interception filter tests ---
