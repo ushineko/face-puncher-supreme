@@ -1,6 +1,8 @@
 {
   "name": "fps-dashboard",
   "private": true,
+  "license": "MIT",
+  "author": "ushineko",
   "type": "module",
   "scripts": {
     "dev": "vite",

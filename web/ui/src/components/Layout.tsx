@@ -48,6 +48,18 @@ export default function Layout({ onLogout }: LayoutProps) {
       <main className="flex-1 overflow-auto p-4">
         <Outlet />
       </main>
+      <footer className="border-t border-vsc-border px-4 py-1.5 text-center text-xs text-vsc-muted">
+        (c)2026 ushineko —{" "}
+        <a
+          href="https://github.com/ushineko/face-puncher-supreme"
+          className="text-vsc-accent hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          github.com/ushineko/face-puncher-supreme
+        </a>
+        {" "}— MIT License
+      </footer>
     </div>
   );
 }

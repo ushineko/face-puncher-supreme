@@ -20,6 +20,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Test](#test)
 - [Lint](#lint)
 - [Project Structure](#project-structure)
+- [License](#license)
 - [Changelog](#changelog)
 
 ## Build
@@ -463,6 +464,12 @@ agents/                Cross-system testing guides
 fpsd.yml               Reference configuration with defaults and blocklist URLs
 ```
 
+## License
+
+MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](https://github.com/ushineko/face-puncher-supreme)
+
+See [LICENSE](LICENSE) for the full text.
+
 ## Changelog
 
 ### v1.1.0 — 2026-02-17
@@ -488,6 +495,11 @@ fpsd.yml               Reference configuration with defaults and blocklist URLs
 - 12 new transparent proxy tests (SNI parsing, prefixConn, real TLS ClientHello validation)
 - 128 total tests (all passing), 0 lint issues
 - Verified on: iPhone 17 Pro Max (iOS 26.2.1), iPad Pro 13" M5 (iPadOS 26.2), Windows 11 Pro (Vivaldi, transparent mode), macOS 26.3 (Safari)
+
+### v1.1.2 — 2026-02-17
+
+- MIT license and copyright notice added to project
+- Copyright footer in dashboard layout
 
 ### v1.1.1 — 2026-02-17
 
