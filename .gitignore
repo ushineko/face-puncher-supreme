@@ -12,3 +12,7 @@ ca-key.pem
 
 # Interception capture data
 intercepts/
+
+# Frontend build artifacts
+web/ui/node_modules/
+web/ui/dist/

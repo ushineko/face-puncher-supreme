@@ -48,6 +48,7 @@ type Server struct {
 	heartbeatHandler http.HandlerFunc
 	statsHandler     http.HandlerFunc
 	caPEMHandler     http.HandlerFunc
+	dashboardHandler http.Handler
 
 	// Stats callbacks.
 	onRequest     func(clientIP, domain string, blocked bool, bytesIn, bytesOut int64)
@@ -439,6 +440,11 @@ func (s *Server) SetHandlers(heartbeat, stats http.HandlerFunc) {
 // SetCAPEMHandler sets the handler for the /fps/ca.pem endpoint.
 func (s *Server) SetCAPEMHandler(handler http.HandlerFunc) {
 	s.caPEMHandler = handler
+}
+
+// SetDashboardHandler sets the handler for dashboard routes (/fps/dashboard/*, /fps/api/*).
+func (s *Server) SetDashboardHandler(handler http.Handler) {
+	s.dashboardHandler = handler
 }
 
 // hopByHopHeaders are headers that apply to a single transport-level

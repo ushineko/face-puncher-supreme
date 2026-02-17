@@ -163,56 +163,60 @@ type TrafficBlock struct {
 	TotalBytesOut int64 `json:"total_bytes_out"`
 }
 
+// BuildHeartbeat constructs a HeartbeatResponse from the given data sources.
+func BuildHeartbeat(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData, pluginsFn func() *PluginsData) HeartbeatResponse {
+	mode := "passthrough"
+	if blockFn != nil {
+		if bd := blockFn(); bd != nil && bd.Size > 0 {
+			mode = "blocking"
+		}
+	}
+
+	var mitmEnabled bool
+	var mitmDomains int
+	if mitmFn != nil {
+		if md := mitmFn(); md != nil {
+			mitmEnabled = md.Enabled
+			mitmDomains = md.DomainsConfigured
+		}
+	}
+
+	var pluginsActive int
+	var pluginList []string
+	if pluginsFn != nil {
+		if pd := pluginsFn(); pd != nil {
+			pluginsActive = pd.Active
+			for _, p := range pd.Plugins {
+				pluginList = append(pluginList, p.Name+"@"+p.Version)
+			}
+		}
+	}
+	if pluginList == nil {
+		pluginList = []string{}
+	}
+
+	return HeartbeatResponse{
+		Status:        "ok",
+		Service:       "face-puncher-supreme",
+		Version:       version.Short(),
+		Mode:          mode,
+		MITMEnabled:   mitmEnabled,
+		MITMDomains:   mitmDomains,
+		PluginsActive: pluginsActive,
+		Plugins:       pluginList,
+		UptimeSeconds: int64(info.Uptime().Seconds()),
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		GoVersion:     runtime.Version(),
+		StartedAt:     info.StartedAt().UTC().Format(time.RFC3339),
+	}
+}
+
 // HeartbeatHandler returns an http.HandlerFunc for the heartbeat endpoint.
 // No database queries, no sorting — just reads atomics and static values.
 func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData, pluginsFn func() *PluginsData) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		mode := "passthrough"
-		if blockFn != nil {
-			if bd := blockFn(); bd != nil && bd.Size > 0 {
-				mode = "blocking"
-			}
-		}
-
-		var mitmEnabled bool
-		var mitmDomains int
-		if mitmFn != nil {
-			if md := mitmFn(); md != nil {
-				mitmEnabled = md.Enabled
-				mitmDomains = md.DomainsConfigured
-			}
-		}
-
-		var pluginsActive int
-		var pluginList []string
-		if pluginsFn != nil {
-			if pd := pluginsFn(); pd != nil {
-				pluginsActive = pd.Active
-				for _, p := range pd.Plugins {
-					pluginList = append(pluginList, p.Name+"@"+p.Version)
-				}
-			}
-		}
-		if pluginList == nil {
-			pluginList = []string{}
-		}
-
-		resp := HeartbeatResponse{
-			Status:        "ok",
-			Service:       "face-puncher-supreme",
-			Version:       version.Short(),
-			Mode:          mode,
-			MITMEnabled:   mitmEnabled,
-			MITMDomains:   mitmDomains,
-			PluginsActive: pluginsActive,
-			Plugins:       pluginList,
-			UptimeSeconds: int64(info.Uptime().Seconds()),
-			OS:            runtime.GOOS,
-			Arch:          runtime.GOARCH,
-			GoVersion:     runtime.Version(),
-			StartedAt:     info.StartedAt().UTC().Format(time.RFC3339),
-		}
-
+		resp := BuildHeartbeat(info, blockFn, mitmFn, pluginsFn)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // best-effort response
@@ -227,6 +231,119 @@ type StatsProvider struct {
 	PluginsFn func() *PluginsData
 	StatsDB   *stats.DB
 	Collector *stats.Collector
+}
+
+// BuildStats constructs a StatsResponse from the given data sources.
+// n controls the top-N list sizes. periodSince filters to a time window (nil = all time).
+func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse {
+	// Block stats from blocklist DB.
+	var blocksTotal int64
+	var allowsTotal int64
+	var blocklistSize int
+	var allowlistSize int
+	var blocklistSources int
+	if sp.BlockFn != nil {
+		if bd := sp.BlockFn(); bd != nil {
+			blocksTotal = bd.Total
+			allowsTotal = bd.AllowsTotal
+			blocklistSize = bd.Size
+			allowlistSize = bd.AllowlistSize
+			blocklistSources = bd.Sources
+		}
+	}
+
+	var topBlocked []TopEntry
+	var topAllowed []TopEntry
+	var topRequested []TopEntry
+	var topClients []ClientEntry
+	var totalReqs, totalBlocked, totalBytesIn, totalBytesOut int64
+
+	switch {
+	case periodSince != nil && sp.StatsDB != nil:
+		topBlocked = domainCountsToEntries(sp.StatsDB.TopBlocked(n))
+		topAllowed = domainCountsToEntries(sp.StatsDB.TopAllowed(n))
+		topRequested = domainCountsToEntries(sp.StatsDB.TopRequested(n))
+		clients := sp.StatsDB.TopClientsSince(n, *periodSince)
+		topClients = clientSnapsToEntries(clients)
+		totalReqs, totalBlocked, totalBytesIn, totalBytesOut = sp.StatsDB.TrafficTotalsSince(*periodSince)
+	case sp.StatsDB != nil:
+		topBlocked = domainCountsToEntries(sp.StatsDB.MergedTopBlocked(n))
+		topAllowed = domainCountsToEntries(sp.StatsDB.MergedTopAllowed(n))
+		topRequested = domainCountsToEntries(sp.StatsDB.MergedTopRequested(n))
+		topClients = clientSnapsToEntries(sp.StatsDB.MergedTopClients(n))
+		totalReqs = sp.Collector.TotalRequests()
+		totalBlocked = sp.Collector.TotalBlocked()
+		totalBytesIn = sp.Collector.TotalBytesIn()
+		totalBytesOut = sp.Collector.TotalBytesOut()
+	default:
+		topBlocked = domainCountsToEntries(topN(sp.Collector.SnapshotDomainBlocks(), n))
+		topRequested = domainCountsToEntries(topN(sp.Collector.SnapshotDomainRequests(), n))
+		topClients = clientSnapsToEntries(topNClients(sp.Collector.SnapshotClients(), n))
+		totalReqs = sp.Collector.TotalRequests()
+		totalBlocked = sp.Collector.TotalBlocked()
+		totalBytesIn = sp.Collector.TotalBytesIn()
+		totalBytesOut = sp.Collector.TotalBytesOut()
+	}
+
+	if topBlocked == nil {
+		topBlocked = []TopEntry{}
+	}
+	if topAllowed == nil {
+		topAllowed = []TopEntry{}
+	}
+	if topRequested == nil {
+		topRequested = []TopEntry{}
+	}
+	if topClients == nil {
+		topClients = []ClientEntry{}
+	}
+
+	// MITM stats (always from in-memory — no DB persistence for MITM yet).
+	mitmBlock := MITMBlock{}
+	if sp.MITMFn != nil {
+		if md := sp.MITMFn(); md != nil {
+			mitmBlock.Enabled = md.Enabled
+			mitmBlock.InterceptsTotal = md.InterceptsTotal
+			mitmBlock.DomainsConfigured = md.DomainsConfigured
+		}
+	}
+	topMITM := domainCountsToEntries(topN(sp.Collector.SnapshotMITMIntercepts(), n))
+	if topMITM == nil {
+		topMITM = []TopEntry{}
+	}
+	mitmBlock.TopIntercepted = topMITM
+
+	pluginsBlock := buildPluginsBlock(sp, n)
+
+	return StatsResponse{
+		Connections: ConnectionsBlock{
+			Total:  sp.Info.ConnectionsTotal(),
+			Active: sp.Info.ConnectionsActive(),
+		},
+		Blocking: BlockingBlock{
+			BlocksTotal:      blocksTotal,
+			AllowsTotal:      allowsTotal,
+			BlocklistSize:    blocklistSize,
+			AllowlistSize:    allowlistSize,
+			BlocklistSources: blocklistSources,
+			TopBlocked:       topBlocked,
+			TopAllowed:       topAllowed,
+		},
+		MITM:    mitmBlock,
+		Plugins: pluginsBlock,
+		Domains: DomainsBlock{
+			TopRequested: topRequested,
+		},
+		Clients: ClientsBlock{
+			TopByRequests: topClients,
+		},
+		Traffic: TrafficBlock{
+			TotalRequests: totalReqs,
+			TotalBlocked:  totalBlocked,
+			TotalBytesIn:  totalBytesIn,
+			TotalBytesOut: totalBytesOut,
+		},
+	}
 }
 
 // StatsHandler returns an http.HandlerFunc for the full stats endpoint.
@@ -257,117 +374,7 @@ func StatsHandler(sp *StatsProvider) http.HandlerFunc {
 			}
 		}
 
-		// Block stats from blocklist DB.
-		var blocksTotal int64
-		var allowsTotal int64
-		var blocklistSize int
-		var allowlistSize int
-		var blocklistSources int
-		if sp.BlockFn != nil {
-			if bd := sp.BlockFn(); bd != nil {
-				blocksTotal = bd.Total
-				allowsTotal = bd.AllowsTotal
-				blocklistSize = bd.Size
-				allowlistSize = bd.AllowlistSize
-				blocklistSources = bd.Sources
-			}
-		}
-
-		var topBlocked []TopEntry
-		var topAllowed []TopEntry
-		var topRequested []TopEntry
-		var topClients []ClientEntry
-		var totalReqs, totalBlocked, totalBytesIn, totalBytesOut int64
-
-		switch {
-		case periodSince != nil && sp.StatsDB != nil:
-			// Time-bounded queries from hourly rollups.
-			topBlocked = domainCountsToEntries(sp.StatsDB.TopBlocked(n))
-			topAllowed = domainCountsToEntries(sp.StatsDB.TopAllowed(n))
-			topRequested = domainCountsToEntries(sp.StatsDB.TopRequested(n))
-			clients := sp.StatsDB.TopClientsSince(n, *periodSince)
-			topClients = clientSnapsToEntries(clients)
-			totalReqs, totalBlocked, totalBytesIn, totalBytesOut = sp.StatsDB.TrafficTotalsSince(*periodSince)
-		case sp.StatsDB != nil:
-			// All-time: merge in-memory + DB.
-			topBlocked = domainCountsToEntries(sp.StatsDB.MergedTopBlocked(n))
-			topAllowed = domainCountsToEntries(sp.StatsDB.MergedTopAllowed(n))
-			topRequested = domainCountsToEntries(sp.StatsDB.MergedTopRequested(n))
-			topClients = clientSnapsToEntries(sp.StatsDB.MergedTopClients(n))
-			totalReqs = sp.Collector.TotalRequests()
-			totalBlocked = sp.Collector.TotalBlocked()
-			totalBytesIn = sp.Collector.TotalBytesIn()
-			totalBytesOut = sp.Collector.TotalBytesOut()
-		default:
-			// No DB — just return in-memory data (no allow data without DB).
-			topBlocked = domainCountsToEntries(topN(sp.Collector.SnapshotDomainBlocks(), n))
-			topRequested = domainCountsToEntries(topN(sp.Collector.SnapshotDomainRequests(), n))
-			topClients = clientSnapsToEntries(topNClients(sp.Collector.SnapshotClients(), n))
-			totalReqs = sp.Collector.TotalRequests()
-			totalBlocked = sp.Collector.TotalBlocked()
-			totalBytesIn = sp.Collector.TotalBytesIn()
-			totalBytesOut = sp.Collector.TotalBytesOut()
-		}
-
-		if topBlocked == nil {
-			topBlocked = []TopEntry{}
-		}
-		if topAllowed == nil {
-			topAllowed = []TopEntry{}
-		}
-		if topRequested == nil {
-			topRequested = []TopEntry{}
-		}
-		if topClients == nil {
-			topClients = []ClientEntry{}
-		}
-
-		// MITM stats (always from in-memory — no DB persistence for MITM yet).
-		mitmBlock := MITMBlock{}
-		if sp.MITMFn != nil {
-			if md := sp.MITMFn(); md != nil {
-				mitmBlock.Enabled = md.Enabled
-				mitmBlock.InterceptsTotal = md.InterceptsTotal
-				mitmBlock.DomainsConfigured = md.DomainsConfigured
-			}
-		}
-		topMITM := domainCountsToEntries(topN(sp.Collector.SnapshotMITMIntercepts(), n))
-		if topMITM == nil {
-			topMITM = []TopEntry{}
-		}
-		mitmBlock.TopIntercepted = topMITM
-
-		pluginsBlock := buildPluginsBlock(sp, n)
-
-		resp := StatsResponse{
-			Connections: ConnectionsBlock{
-				Total:  sp.Info.ConnectionsTotal(),
-				Active: sp.Info.ConnectionsActive(),
-			},
-			Blocking: BlockingBlock{
-				BlocksTotal:      blocksTotal,
-				AllowsTotal:      allowsTotal,
-				BlocklistSize:    blocklistSize,
-				AllowlistSize:    allowlistSize,
-				BlocklistSources: blocklistSources,
-				TopBlocked:       topBlocked,
-				TopAllowed:       topAllowed,
-			},
-			MITM:    mitmBlock,
-			Plugins: pluginsBlock,
-			Domains: DomainsBlock{
-				TopRequested: topRequested,
-			},
-			Clients: ClientsBlock{
-				TopByRequests: topClients,
-			},
-			Traffic: TrafficBlock{
-				TotalRequests: totalReqs,
-				TotalBlocked:  totalBlocked,
-				TotalBytesIn:  totalBytesIn,
-				TotalBytesOut: totalBytesOut,
-			},
-		}
+		resp := BuildStats(sp, n, periodSince)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

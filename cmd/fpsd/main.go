@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ushineko/face-puncher-supreme/internal/blocklist"
 	"github.com/ushineko/face-puncher-supreme/internal/config"
+	"github.com/ushineko/face-puncher-supreme/internal/logbuf"
 	"github.com/ushineko/face-puncher-supreme/internal/logging"
 	"github.com/ushineko/face-puncher-supreme/internal/mitm"
 	"github.com/ushineko/face-puncher-supreme/internal/plugin"
@@ -33,6 +35,7 @@ import (
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
 	"github.com/ushineko/face-puncher-supreme/internal/stats"
 	"github.com/ushineko/face-puncher-supreme/internal/version"
+	"github.com/ushineko/face-puncher-supreme/web"
 )
 
 var (
@@ -44,6 +47,11 @@ var (
 	flagDataDir       string
 	flagConfigPath    string
 	flagForceCA       bool
+
+	// Dashboard CLI flags.
+	flagDashboardUser string
+	flagDashboardPass string
+	flagDashboardDev  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -98,6 +106,10 @@ func init() {
 	rootCmd.Flags().StringVar(&flagLogDir, "log-dir", "", "directory for log files (empty to disable file logging)")
 	rootCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable verbose (DEBUG) logging")
 
+	rootCmd.Flags().StringVar(&flagDashboardUser, "dashboard-user", "", "dashboard login username")
+	rootCmd.Flags().StringVar(&flagDashboardPass, "dashboard-pass", "", "dashboard login password")
+	rootCmd.Flags().BoolVar(&flagDashboardDev, "dashboard-dev", false, "serve dashboard from filesystem (development mode)")
+
 	generateCACmd.Flags().BoolVar(&flagForceCA, "force", false, "overwrite existing CA files")
 
 	configCmd.AddCommand(configDumpCmd)
@@ -143,6 +155,12 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 	if cmd.Flags().Changed("blocklist-url") {
 		overrides.BlocklistURLs = flagBlocklistURLs
 	}
+	if cmd.Flags().Changed("dashboard-user") {
+		overrides.DashboardUser = &flagDashboardUser
+	}
+	if cmd.Flags().Changed("dashboard-pass") {
+		overrides.DashboardPassword = &flagDashboardPass
+	}
 
 	cfg.Merge(overrides)
 
@@ -153,17 +171,22 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 	return cfg, nil
 }
 
-func runProxy(cmd *cobra.Command, args []string) error {
+func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,cyclop // main entry point
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
 	}
 
-	logger, cleanup := logging.Setup(logging.Config{
-		LogDir:  cfg.LogDir,
-		Verbose: cfg.Verbose,
+	// Create log buffer for dashboard live log viewer.
+	logBuf := logbuf.New(1000)
+
+	logResult := logging.Setup(logging.Config{
+		LogDir:        cfg.LogDir,
+		Verbose:       cfg.Verbose,
+		ExtraHandlers: []slog.Handler{logBuf.Handler()},
 	})
-	defer cleanup()
+	defer logResult.Cleanup()
+	logger := logResult.Logger
 
 	dbPath := filepath.Join(cfg.DataDir, "blocklist.db")
 
@@ -251,8 +274,8 @@ func runProxy(cmd *cobra.Command, args []string) error {
 
 		mitmDataFn = func() *probe.MITMData {
 			return &probe.MITMData{
-				Enabled:          true,
-				InterceptsTotal:  mitmInterceptor.InterceptsTotal.Load(),
+				Enabled:           true,
+				InterceptsTotal:   mitmInterceptor.InterceptsTotal.Load(),
 				DomainsConfigured: mitmInterceptor.Domains(),
 			}
 		}
@@ -284,6 +307,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 
 	// Initialize stats DB if enabled.
 	var statsDB *stats.DB
+	var statsProvider *probe.StatsProvider
 	if cfg.Stats.Enabled {
 		statsDBPath := filepath.Join(cfg.DataDir, "stats.db")
 		statsDB, err = stats.Open(statsDBPath, collector, logger, cfg.Stats.FlushInterval.Duration)
@@ -321,18 +345,56 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn, pluginsDataFn)
 	var statsHandler http.HandlerFunc
 	if cfg.Stats.Enabled {
-		statsHandler = probe.StatsHandler(&probe.StatsProvider{
+		statsProvider = &probe.StatsProvider{
 			Info:      srv,
 			BlockFn:   blockDataFn,
 			MITMFn:    mitmDataFn,
 			PluginsFn: pluginsDataFn,
 			StatsDB:   statsDB,
 			Collector: collector,
-		})
+		}
+		statsHandler = probe.StatsHandler(statsProvider)
 	} else {
 		statsHandler = probe.StatsDisabledHandler()
 	}
 	srv.SetHandlers(heartbeatHandler, statsHandler)
+
+	// Initialize dashboard if credentials are configured.
+	if cfg.Dashboard.Username != "" && cfg.Dashboard.Password != "" {
+		dashboard := web.NewDashboard(&web.DashboardConfig{
+			PathPrefix: cfg.Management.PathPrefix,
+			Username:   cfg.Dashboard.Username,
+			Password:   cfg.Dashboard.Password,
+			DevMode:    flagDashboardDev,
+			LogBuffer:  logBuf,
+			HeartbeatJSON: func() ([]byte, error) {
+				resp := probe.BuildHeartbeat(srv, blockDataFn, mitmDataFn, pluginsDataFn)
+				return json.Marshal(resp)
+			},
+			StatsJSON: func() ([]byte, error) {
+				if statsProvider != nil {
+					resp := probe.BuildStats(statsProvider, 25, nil)
+					return json.Marshal(resp)
+				}
+				return json.Marshal(map[string]string{"status": "stats disabled"})
+			},
+			ConfigJSON: func() ([]byte, error) {
+				redacted := cfg.Redacted()
+				return json.Marshal(redacted)
+			},
+			ReloadFn: makeReloadFn(&cfg, bl, logBuf, logResult.LevelVar, logger),
+			Logger:   logger,
+		})
+		dashboard.Start()
+		defer dashboard.Stop()
+		srv.SetDashboardHandler(dashboard)
+		logger.Info("dashboard enabled",
+			"url", "http://"+cfg.Listen+cfg.Management.PathPrefix+"/dashboard/",
+			"dev_mode", flagDashboardDev,
+		)
+	} else {
+		logger.Info("dashboard disabled (no credentials configured)")
+	}
 
 	// Start stats flush loop.
 	if statsDB != nil {
@@ -371,22 +433,64 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("shutdown error: %w", err)
 	}
 
-	// Stats DB close (with final flush) happens via defer above.
-
 	logger.Info("proxy stopped")
 	return nil
 }
 
-func runUpdateBlocklist(cmd *cobra.Command, args []string) error {
+// makeReloadFn creates a function that re-reads config and hot-reloads subsystems.
+func makeReloadFn(
+	currentCfg *config.Config,
+	bl *blocklist.DB,
+	logBuf *logbuf.Buffer,
+	levelVar *slog.LevelVar,
+	logger *slog.Logger,
+) func() error {
+	return func() error {
+		newCfg, _, err := config.Load(flagConfigPath)
+		if err != nil {
+			return fmt.Errorf("reload: %w", err)
+		}
+		if err := newCfg.Validate(); err != nil {
+			return fmt.Errorf("reload: %w", err)
+		}
+
+		// Update allowlist.
+		bl.SetAllowlist(newCfg.Allowlist)
+
+		// Update inline blocklist (additive — new domains merged in).
+		bl.AddInlineDomains(newCfg.Blocklist)
+
+		// Update verbose mode.
+		if newCfg.Verbose {
+			levelVar.Set(slog.LevelDebug)
+		} else {
+			levelVar.Set(slog.LevelInfo)
+		}
+
+		// Resize log buffer if capacity changed (future config field).
+		// Currently a no-op but prevents logBuf from being flagged unused.
+		logBuf.Resize(1000)
+
+		*currentCfg = newCfg
+		logger.Info("configuration reloaded",
+			"allowlist_entries", bl.AllowlistSize(),
+			"verbose", newCfg.Verbose,
+		)
+		return nil
+	}
+}
+
+func runUpdateBlocklist(cmd *cobra.Command, _ []string) error {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
 	}
 
-	logger, cleanup := logging.Setup(logging.Config{
+	logResult := logging.Setup(logging.Config{
 		Verbose: true,
 	})
-	defer cleanup()
+	defer logResult.Cleanup()
+	logger := logResult.Logger
 
 	if len(cfg.BlocklistURLs) == 0 {
 		return fmt.Errorf("no blocklist URLs configured (use --blocklist-url or config file)")
@@ -413,7 +517,7 @@ func runUpdateBlocklist(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runConfigDump(cmd *cobra.Command, args []string) error {
+func runConfigDump(cmd *cobra.Command, _ []string) error {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
@@ -428,7 +532,7 @@ func runConfigDump(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runConfigValidate(cmd *cobra.Command, args []string) error {
+func runConfigValidate(cmd *cobra.Command, _ []string) error {
 	_, err := loadConfig(cmd)
 	if err != nil {
 		return err

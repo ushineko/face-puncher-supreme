@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"zombiezen.com/go/sqlite"
@@ -13,6 +14,7 @@ import (
 
 // DB manages the stats SQLite database and periodic flushing.
 type DB struct {
+	mu        sync.Mutex
 	conn      *sqlite.Conn
 	collector *Collector
 	logger    *slog.Logger
@@ -110,6 +112,8 @@ func (db *DB) flushLoop(ctx context.Context) {
 
 // Flush computes deltas since the last flush and writes them to SQLite.
 func (db *DB) Flush() (err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	hour := time.Now().UTC().Truncate(time.Hour).Format("2006-01-02T15")
 
 	defer sqlitex.Save(db.conn)(&err)
@@ -218,6 +222,8 @@ func (db *DB) Flush() (err error) {
 
 // TopBlocked returns the top n blocked domains from the database.
 func (db *DB) TopBlocked(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	var out []DomainCount
 	_ = sqlitex.Execute(db.conn, `
 		SELECT domain, count FROM blocked_domains
@@ -237,6 +243,8 @@ func (db *DB) TopBlocked(n int) []DomainCount {
 
 // TopRequested returns the top n most-requested domains from the database.
 func (db *DB) TopRequested(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	var out []DomainCount
 	_ = sqlitex.Execute(db.conn, `
 		SELECT domain, count FROM domain_requests
@@ -256,6 +264,8 @@ func (db *DB) TopRequested(n int) []DomainCount {
 
 // TopClients returns the top n clients by request count from the database.
 func (db *DB) TopClients(n int) []ClientSnapshot {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	var out []ClientSnapshot
 	_ = sqlitex.Execute(db.conn, `
 		SELECT client_ip,
@@ -284,6 +294,8 @@ func (db *DB) TopClients(n int) []ClientSnapshot {
 
 // TopClientsSince returns the top n clients within a time window.
 func (db *DB) TopClientsSince(n int, since time.Time) []ClientSnapshot {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	sinceHour := since.UTC().Truncate(time.Hour).Format("2006-01-02T15")
 	var out []ClientSnapshot
 	_ = sqlitex.Execute(db.conn, `
@@ -314,6 +326,8 @@ func (db *DB) TopClientsSince(n int, since time.Time) []ClientSnapshot {
 
 // TrafficTotalsSince returns aggregate traffic stats within a time window.
 func (db *DB) TrafficTotalsSince(since time.Time) (requests, blocked, bytesIn, bytesOut int64) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	sinceHour := since.UTC().Truncate(time.Hour).Format("2006-01-02T15")
 	_ = sqlitex.Execute(db.conn, `
 		SELECT COALESCE(SUM(requests), 0),
@@ -338,6 +352,8 @@ func (db *DB) TrafficTotalsSince(since time.Time) (requests, blocked, bytesIn, b
 // MergedTopBlocked returns the top n blocked domains by merging DB totals
 // with unflushed in-memory deltas.
 func (db *DB) MergedTopBlocked(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	merged := make(map[string]int64)
 
 	// DB cumulative totals (all rows, no limit).
@@ -359,6 +375,8 @@ func (db *DB) MergedTopBlocked(n int) []DomainCount {
 // MergedTopRequested returns the top n requested domains by merging DB totals
 // with unflushed in-memory deltas.
 func (db *DB) MergedTopRequested(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	merged := make(map[string]int64)
 
 	// DB cumulative totals (all rows, no limit).
@@ -380,6 +398,8 @@ func (db *DB) MergedTopRequested(n int) []DomainCount {
 // MergedTopClients returns the top n clients by merging DB totals
 // with unflushed in-memory deltas.
 func (db *DB) MergedTopClients(n int) []ClientSnapshot {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	merged := make(map[string]*ClientSnapshot)
 
 	// DB cumulative totals.
@@ -443,6 +463,8 @@ func (db *DB) MergedTopClients(n int) []ClientSnapshot {
 
 // TopAllowed returns the top n allowed domains from the database.
 func (db *DB) TopAllowed(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	var out []DomainCount
 	_ = sqlitex.Execute(db.conn, `
 		SELECT domain, count FROM allowed_domains
@@ -463,6 +485,8 @@ func (db *DB) TopAllowed(n int) []DomainCount {
 // MergedTopAllowed returns the top n allowed domains by merging DB totals
 // with unflushed in-memory deltas.
 func (db *DB) MergedTopAllowed(n int) []DomainCount {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	merged := make(map[string]int64)
 
 	// DB cumulative totals.

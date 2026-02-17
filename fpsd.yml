@@ -70,6 +70,13 @@ plugins:
     options:
       log_matches: true
 
+# Dashboard — web-based monitoring UI at /fps/dashboard.
+# Both username and password must be set to enable the dashboard.
+# If omitted, /fps/dashboard returns 503.
+dashboard:
+  username: "admin"
+  password: "admin"
+
 # Management endpoints.
 management:
   path_prefix: "/fps"  # URL prefix for management endpoints

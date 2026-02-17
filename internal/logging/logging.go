@@ -22,55 +22,74 @@ type Config struct {
 	LogDir string
 	// Verbose enables DEBUG-level logging. Default is INFO.
 	Verbose bool
+	// ExtraHandlers are additional slog.Handlers to include in the fan-out chain
+	// (e.g., logbuf.Buffer.Handler() for the dashboard).
+	ExtraHandlers []slog.Handler
+}
+
+// Result holds the outputs of logging Setup.
+type Result struct {
+	Logger  *slog.Logger
+	Cleanup func()
+	// LevelVar allows runtime log level changes (e.g., verbose toggle via reload).
+	LevelVar *slog.LevelVar
 }
 
 // Setup creates a logger that writes to stderr and optionally to a rotated
-// log file. Returns the logger and a cleanup function to close the file.
-func Setup(cfg Config) (logger *slog.Logger, cleanup func()) {
-	level := slog.LevelInfo
+// log file. Returns a Result with the logger, cleanup function, and LevelVar
+// for runtime level changes.
+func Setup(cfg Config) Result {
+	levelVar := new(slog.LevelVar)
 	if cfg.Verbose {
-		level = slog.LevelDebug
+		levelVar.Set(slog.LevelDebug)
+	} else {
+		levelVar.Set(slog.LevelInfo)
 	}
 
 	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
+		Level: levelVar,
 	})
 
-	if cfg.LogDir == "" {
-		return slog.New(stderrHandler), func() {}
+	handlers := []slog.Handler{stderrHandler}
+
+	var cleanup func()
+	if cfg.LogDir != "" {
+		// Ensure log directory exists.
+		if err := os.MkdirAll(cfg.LogDir, 0o750); err != nil { //nolint:gosec // log directory
+			slog.New(stderrHandler).Warn("failed to create log directory, file logging disabled",
+				"dir", cfg.LogDir,
+				"error", err,
+			)
+		} else {
+			lj := &lumberjack.Logger{
+				Filename:   filepath.Join(cfg.LogDir, "fpsd.log"),
+				MaxSize:    10, // MB per file
+				MaxBackups: 3,  // keep 3 old files
+				MaxAge:     7,  // days to retain
+				Compress:   true,
+			}
+
+			fileHandler := slog.NewJSONHandler(lj, &slog.HandlerOptions{
+				Level: levelVar,
+			})
+			handlers = append(handlers, fileHandler)
+			cleanup = func() { _ = lj.Close() }
+		}
 	}
 
-	// Ensure log directory exists.
-	if err := os.MkdirAll(cfg.LogDir, 0o750); err != nil { //nolint:gosec // log directory
-		// Fall back to stderr-only if we can't create the directory.
-		slog.New(stderrHandler).Warn("failed to create log directory, file logging disabled",
-			"dir", cfg.LogDir,
-			"error", err,
-		)
-		return slog.New(stderrHandler), func() {}
+	// Add any extra handlers (e.g., logbuf for dashboard).
+	handlers = append(handlers, cfg.ExtraHandlers...)
+
+	if cleanup == nil {
+		cleanup = func() {}
 	}
 
-	lj := &lumberjack.Logger{
-		Filename:   filepath.Join(cfg.LogDir, "fpsd.log"),
-		MaxSize:    10, // MB per file
-		MaxBackups: 3,  // keep 3 old files
-		MaxAge:     7,  // days to retain
-		Compress:   true,
+	multi := &multiHandler{handlers: handlers}
+	return Result{
+		Logger:   slog.New(multi),
+		Cleanup:  cleanup,
+		LevelVar: levelVar,
 	}
-
-	fileHandler := slog.NewJSONHandler(lj, &slog.HandlerOptions{
-		Level: level,
-	})
-
-	multi := &multiHandler{
-		handlers: []slog.Handler{stderrHandler, fileHandler},
-	}
-
-	cleanup = func() {
-		_ = lj.Close()
-	}
-
-	return slog.New(multi), cleanup
 }
 
 // multiHandler fans out log records to multiple slog.Handlers.

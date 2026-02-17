@@ -34,6 +34,7 @@ type Config struct {
 	Timeouts      Timeouts              `yaml:"timeouts"`
 	Management    Management            `yaml:"management"`
 	Stats         Stats                 `yaml:"stats"`
+	Dashboard     Dashboard             `yaml:"dashboard"`
 }
 
 // PluginConf holds per-plugin configuration from fpsd.yml.
@@ -68,6 +69,12 @@ type Management struct {
 type Stats struct {
 	Enabled       bool     `yaml:"enabled"`
 	FlushInterval Duration `yaml:"flush_interval"`
+}
+
+// Dashboard holds web dashboard configuration.
+type Dashboard struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // Default returns a Config populated with built-in defaults.
@@ -134,11 +141,13 @@ func discover() string {
 // CLIOverrides holds values from CLI flags that should override config file values.
 // A nil/zero value means the flag was not explicitly set.
 type CLIOverrides struct {
-	Addr          *string
-	LogDir        *string
-	Verbose       *bool
-	DataDir       *string
-	BlocklistURLs []string
+	Addr              *string
+	LogDir            *string
+	Verbose           *bool
+	DataDir           *string
+	BlocklistURLs     []string
+	DashboardUser     *string
+	DashboardPassword *string
 }
 
 // Merge applies CLI flag overrides to a loaded config. Only explicitly-set
@@ -158,6 +167,12 @@ func (c *Config) Merge(o CLIOverrides) {
 	}
 	if len(o.BlocklistURLs) > 0 {
 		c.BlocklistURLs = o.BlocklistURLs
+	}
+	if o.DashboardUser != nil {
+		c.Dashboard.Username = *o.DashboardUser
+	}
+	if o.DashboardPassword != nil {
+		c.Dashboard.Password = *o.DashboardPassword
 	}
 }
 
@@ -196,6 +211,11 @@ func (c *Config) Validate() error {
 	// Management path prefix.
 	if !strings.HasPrefix(c.Management.PathPrefix, "/") {
 		errs = append(errs, fmt.Sprintf("management.path_prefix: must start with /, got %q", c.Management.PathPrefix))
+	}
+
+	// Dashboard: either both credentials must be set or both must be empty.
+	if (c.Dashboard.Username == "") != (c.Dashboard.Password == "") {
+		errs = append(errs, "dashboard: both username and password must be set (or both empty to disable)")
 	}
 
 	if len(errs) > 0 {
@@ -288,6 +308,15 @@ func validatePlugins(plugins map[string]PluginConf) []string {
 		}
 	}
 	return errs
+}
+
+// Redacted returns a copy of the config with sensitive fields masked.
+func (c *Config) Redacted() Config {
+	r := *c
+	if r.Dashboard.Password != "" {
+		r.Dashboard.Password = "***"
+	}
+	return r
 }
 
 // Dump serializes the config to YAML.

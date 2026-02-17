@@ -1,7 +1,7 @@
-.PHONY: build test lint coverage clean setup install-lint
+.PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint
 
 BINARY := fpsd
-VERSION := 0.9.0
+VERSION := 1.0.0
 COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/ushineko/face-puncher-supreme/internal/version
@@ -12,7 +12,16 @@ LINT_NAME := golangci-lint
 LINT_VERSION := v2.9.0
 LINT_PROGRAM := $(LINT_NAME)-$(LINT_VERSION)
 
-build:
+copy-readme:
+	cp README.md web/readme.md
+
+build-ui: copy-readme
+	cd web/ui && npm ci && npx vite build
+
+build: build-ui
+	go build $(LDFLAGS) -o $(BINARY) ./cmd/fpsd
+
+build-go: copy-readme
 	go build $(LDFLAGS) -o $(BINARY) ./cmd/fpsd
 
 test:
@@ -35,6 +44,7 @@ coverage:
 
 clean:
 	rm -f $(BINARY) coverage.out coverage.html
+	rm -rf web/ui/dist web/ui/node_modules
 
 setup: install-lint
 	go mod download
