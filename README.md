@@ -521,6 +521,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.1 — 2026-02-17
+
+- ci: automated AUR publishing on version tags (spec 014)
+
 ### v1.3.0 — 2026-02-17
 
 - fix: anchor links in README (About page) now scroll to target headings instead of opening blank tabs
