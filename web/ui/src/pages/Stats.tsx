@@ -25,6 +25,7 @@ interface TopEntry {
 
 interface ClientEntry {
   client_ip: string;
+  hostname?: string;
   requests: number;
   blocked: number;
   bytes_in: number;
@@ -283,7 +284,7 @@ export default function Stats() {
           <TopTable
             title="Top Clients"
             items={stats.clients.top_by_requests.map((e) => ({
-              label: e.client_ip,
+              label: e.hostname || e.client_ip,
               value: e.requests,
             }))}
           />

@@ -144,6 +144,7 @@ type DomainsBlock struct {
 // ClientEntry holds per-client stats for the response.
 type ClientEntry struct {
 	ClientIP string `json:"client_ip"`
+	Hostname string `json:"hostname,omitempty"`
 	Requests int64  `json:"requests"`
 	Blocked  int64  `json:"blocked"`
 	BytesIn  int64  `json:"bytes_in"`
@@ -231,6 +232,7 @@ type StatsProvider struct {
 	PluginsFn func() *PluginsData
 	StatsDB   *stats.DB
 	Collector *stats.Collector
+	Resolver  *ReverseDNS
 }
 
 // BuildStats constructs a StatsResponse from the given data sources.
@@ -264,13 +266,13 @@ func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse 
 		topAllowed = domainCountsToEntries(sp.StatsDB.TopAllowed(n))
 		topRequested = domainCountsToEntries(sp.StatsDB.TopRequested(n))
 		clients := sp.StatsDB.TopClientsSince(n, *periodSince)
-		topClients = clientSnapsToEntries(clients)
+		topClients = clientSnapsToEntries(clients, sp.Resolver)
 		totalReqs, totalBlocked, totalBytesIn, totalBytesOut = sp.StatsDB.TrafficTotalsSince(*periodSince)
 	case sp.StatsDB != nil:
 		topBlocked = domainCountsToEntries(sp.StatsDB.MergedTopBlocked(n))
 		topAllowed = domainCountsToEntries(sp.StatsDB.MergedTopAllowed(n))
 		topRequested = domainCountsToEntries(sp.StatsDB.MergedTopRequested(n))
-		topClients = clientSnapsToEntries(sp.StatsDB.MergedTopClients(n))
+		topClients = clientSnapsToEntries(sp.StatsDB.MergedTopClients(n), sp.Resolver)
 		totalReqs = sp.Collector.TotalRequests()
 		totalBlocked = sp.Collector.TotalBlocked()
 		totalBytesIn = sp.Collector.TotalBytesIn()
@@ -278,7 +280,7 @@ func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse 
 	default:
 		topBlocked = domainCountsToEntries(topN(sp.Collector.SnapshotDomainBlocks(), n))
 		topRequested = domainCountsToEntries(topN(sp.Collector.SnapshotDomainRequests(), n))
-		topClients = clientSnapsToEntries(topNClients(sp.Collector.SnapshotClients(), n))
+		topClients = clientSnapsToEntries(topNClients(sp.Collector.SnapshotClients(), n), sp.Resolver)
 		totalReqs = sp.Collector.TotalRequests()
 		totalBlocked = sp.Collector.TotalBlocked()
 		totalBytesIn = sp.Collector.TotalBytesIn()
@@ -444,7 +446,8 @@ func domainCountsToEntries(dcs []stats.DomainCount) []TopEntry {
 }
 
 // clientSnapsToEntries converts stats.ClientSnapshot slice to ClientEntry slice.
-func clientSnapsToEntries(snaps []stats.ClientSnapshot) []ClientEntry {
+// If resolver is non-nil, each IP is resolved to a hostname.
+func clientSnapsToEntries(snaps []stats.ClientSnapshot, resolver *ReverseDNS) []ClientEntry {
 	out := make([]ClientEntry, len(snaps))
 	for i, cs := range snaps {
 		out[i] = ClientEntry{
@@ -453,6 +456,9 @@ func clientSnapsToEntries(snaps []stats.ClientSnapshot) []ClientEntry {
 			Blocked:  cs.Blocked,
 			BytesIn:  cs.BytesIn,
 			BytesOut: cs.BytesOut,
+		}
+		if resolver != nil {
+			out[i].Hostname = resolver.Lookup(cs.IP)
 		}
 	}
 	return out

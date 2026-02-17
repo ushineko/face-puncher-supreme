@@ -12,6 +12,8 @@
   --color-vsc-error: #f44747;
   --color-vsc-header: #333333;
 
+  --font-sans: "Inter", "SF Pro Display", "Segoe UI", system-ui, -apple-system,
+    sans-serif;
   --font-mono: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas",
     monospace;
 }
@@ -20,7 +22,7 @@
   body {
     background-color: var(--color-vsc-bg);
     color: var(--color-vsc-text);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     margin: 0;
   }
 

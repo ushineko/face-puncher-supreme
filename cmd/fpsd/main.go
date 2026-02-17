@@ -352,6 +352,7 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 			PluginsFn: pluginsDataFn,
 			StatsDB:   statsDB,
 			Collector: collector,
+			Resolver:  probe.NewReverseDNS(5 * time.Minute),
 		}
 		statsHandler = probe.StatsHandler(statsProvider)
 	} else {
