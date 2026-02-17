@@ -21,4 +21,5 @@ web/ui/dist/
 *.pkg.tar.zst
 /pkg/
 /src/
+/face-puncher-supreme/
 .aur-repo/
