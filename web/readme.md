@@ -489,6 +489,10 @@ fpsd.yml               Reference configuration with defaults and blocklist URLs
 - 128 total tests (all passing), 0 lint issues
 - Verified on: iPhone 17 Pro Max (iOS 26.2.1), iPad Pro 13" M5 (iPadOS 26.2), Windows 11 Pro (Vivaldi, transparent mode), macOS 26.3 (Safari)
 
+### v1.1.1 — 2026-02-17
+
+- Fix: dashboard About page tables not rendering (added remark-gfm plugin for GFM table support)
+
 ### v1.0.0 — 2026-02-16
 
 - Web dashboard: real-time proxy monitoring and management at `/fps/dashboard` (spec 009)
