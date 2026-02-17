@@ -1,8 +1,30 @@
+import { Children, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 interface MarkdownProps {
   content: string;
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function extractText(children: React.ReactNode): string {
+  let text = "";
+  Children.forEach(children, (child) => {
+    if (typeof child === "string") {
+      text += child;
+    } else if (isValidElement(child) && child.props?.children) {
+      text += extractText(child.props.children);
+    }
+  });
+  return text;
 }
 
 export default function Markdown({ content }: MarkdownProps) {
@@ -11,36 +33,62 @@ export default function Markdown({ content }: MarkdownProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          h1: ({ children }) => (
-            <h1 className="text-xl text-vsc-text font-bold mt-6 mb-3 border-b border-vsc-border pb-2">
-              {children}
-            </h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="text-lg text-vsc-text font-bold mt-5 mb-2 border-b border-vsc-border pb-1">
-              {children}
-            </h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="text-base text-vsc-text font-bold mt-4 mb-2">
-              {children}
-            </h3>
-          ),
+          h1: ({ children }) => {
+            const id = slugify(extractText(children));
+            return (
+              <h1 id={id} className="text-xl text-vsc-text font-bold mt-6 mb-3 border-b border-vsc-border pb-2">
+                {children}
+              </h1>
+            );
+          },
+          h2: ({ children }) => {
+            const id = slugify(extractText(children));
+            return (
+              <h2 id={id} className="text-lg text-vsc-text font-bold mt-5 mb-2 border-b border-vsc-border pb-1">
+                {children}
+              </h2>
+            );
+          },
+          h3: ({ children }) => {
+            const id = slugify(extractText(children));
+            return (
+              <h3 id={id} className="text-base text-vsc-text font-bold mt-4 mb-2">
+                {children}
+              </h3>
+            );
+          },
           p: ({ children }) => (
             <p className="text-sm text-vsc-text leading-relaxed mb-3">
               {children}
             </p>
           ),
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              className="text-vsc-accent hover:underline"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            if (href?.startsWith("#")) {
+              return (
+                <a
+                  href={href}
+                  className="text-vsc-accent hover:underline"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const target = document.getElementById(href.slice(1));
+                    target?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                >
+                  {children}
+                </a>
+              );
+            }
+            return (
+              <a
+                href={href}
+                className="text-vsc-accent hover:underline"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {children}
+              </a>
+            );
+          },
           code: ({ className, children }) => {
             const isBlock = className?.includes("language-");
             if (isBlock) {

@@ -1,7 +1,10 @@
-import { useRef } from "react";
+import { useRef, useCallback, useMemo } from "react";
 import { useSocket } from "../hooks/useSocket";
+import { useLayout } from "../hooks/useLayout";
 import StatCard, { StatRow } from "../components/StatCard";
 import TopTable from "../components/TopTable";
+import LineChart, { TimePoint } from "../components/LineChart";
+import PieChart from "../components/PieChart";
 
 interface HeartbeatData {
   status: string;
@@ -105,130 +108,145 @@ function useRate(current: number): string {
   return rateRef.current > 0 ? rateRef.current.toFixed(1) : "0";
 }
 
+const MAX_HISTORY = 60; // ~3 minutes at 3s intervals
+
 export default function Stats() {
   const heartbeat = useSocket<HeartbeatData>("heartbeat");
   const stats = useSocket<StatsData>("stats");
   const reqRate = useRate(stats?.traffic.total_requests ?? 0);
   const bytesInRate = useRate(stats?.traffic.total_bytes_in ?? 0);
 
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {/* Heartbeat */}
-        <StatCard title="Server">
-          {heartbeat ? (
-            <>
-              <StatRow label="Version" value={heartbeat.version} accent />
-              <StatRow
-                label="Uptime"
-                value={formatUptime(heartbeat.uptime_seconds)}
-              />
-              <StatRow label="Mode" value={heartbeat.mode} />
-              <StatRow
-                label="MITM"
-                value={
-                  heartbeat.mitm_enabled
-                    ? `${heartbeat.mitm_domains} domains`
-                    : "off"
-                }
-              />
-              <StatRow
-                label="Plugins"
-                value={heartbeat.plugins_active.toString()}
-              />
-              <StatRow
-                label="Platform"
-                value={`${heartbeat.os}/${heartbeat.arch}`}
-              />
-              <StatRow label="Go" value={heartbeat.go_version} />
-            </>
-          ) : (
-            <p className="text-xs text-vsc-muted">Waiting...</p>
-          )}
-        </StatCard>
+  const layout = useLayout();
 
-        {/* Connections */}
-        <StatCard title="Connections">
-          {stats ? (
-            <>
-              <StatRow
-                label="Total"
-                value={stats.connections.total.toLocaleString()}
-                accent
-              />
-              <StatRow
-                label="Active"
-                value={stats.connections.active.toLocaleString()}
-              />
-            </>
-          ) : (
-            <p className="text-xs text-vsc-muted">Waiting...</p>
-          )}
-        </StatCard>
+  // Rolling time-series for the traffic line chart
+  const trafficHistory = useRef<TimePoint[]>([]);
+  if (stats) {
+    const now = Date.now();
+    const hist = trafficHistory.current;
+    // Compute instantaneous rate from the last two stats pushes
+    const prev = hist.length > 0 ? hist[hist.length - 1] : null;
+    let rate = 0;
+    if (prev) {
+      const dt = (now - prev.time) / 1000;
+      if (dt > 0) {
+        // We store the total_requests as value in history, but for the chart
+        // we want req/sec. Recompute from the rate string for consistency.
+        rate = parseFloat(reqRate);
+      }
+    }
+    hist.push({ time: now, value: rate });
+    if (hist.length > MAX_HISTORY) hist.splice(0, hist.length - MAX_HISTORY);
+  }
 
-        {/* Traffic */}
-        <StatCard title="Traffic">
-          {stats ? (
-            <>
-              <StatRow
-                label="Requests"
-                value={stats.traffic.total_requests.toLocaleString()}
-                accent
-              />
-              <StatRow label="Req/sec" value={reqRate} />
-              <StatRow
-                label="Blocked"
-                value={stats.traffic.total_blocked.toLocaleString()}
-              />
-              <StatRow
-                label="Bytes In"
-                value={formatBytes(stats.traffic.total_bytes_in)}
-              />
-              <StatRow
-                label="Bytes Out"
-                value={formatBytes(stats.traffic.total_bytes_out)}
-              />
-              <StatRow label="In/sec" value={formatBytes(Number(bytesInRate))} />
-            </>
-          ) : (
-            <p className="text-xs text-vsc-muted">Waiting...</p>
-          )}
-        </StatCard>
-
-        {/* Blocking */}
-        <StatCard title="Blocking">
-          {stats ? (
-            <>
-              <StatRow
-                label="Blocked"
-                value={stats.blocking.blocks_total.toLocaleString()}
-                accent
-              />
-              <StatRow
-                label="Allowed"
-                value={stats.blocking.allows_total.toLocaleString()}
-              />
-              <StatRow
-                label="Blocklist"
-                value={`${stats.blocking.blocklist_size.toLocaleString()} domains`}
-              />
-              <StatRow
-                label="Allowlist"
-                value={`${stats.blocking.allowlist_size.toLocaleString()} entries`}
-              />
-              <StatRow
-                label="Sources"
-                value={stats.blocking.blocklist_sources.toString()}
-              />
-            </>
-          ) : (
-            <p className="text-xs text-vsc-muted">Waiting...</p>
-          )}
-        </StatCard>
-
-        {/* MITM */}
-        {stats?.mitm.enabled && (
-          <StatCard title="MITM Interception">
+  // Build card renderers keyed by section ID
+  const cardRenderers: Record<string, () => React.ReactNode> = useMemo(
+    () => ({
+      server: () =>
+        heartbeat ? (
+          <>
+            <StatRow label="Version" value={heartbeat.version} accent />
+            <StatRow
+              label="Uptime"
+              value={formatUptime(heartbeat.uptime_seconds)}
+            />
+            <StatRow label="Mode" value={heartbeat.mode} />
+            <StatRow
+              label="MITM"
+              value={
+                heartbeat.mitm_enabled
+                  ? `${heartbeat.mitm_domains} domains`
+                  : "off"
+              }
+            />
+            <StatRow
+              label="Plugins"
+              value={heartbeat.plugins_active.toString()}
+            />
+            <StatRow
+              label="Platform"
+              value={`${heartbeat.os}/${heartbeat.arch}`}
+            />
+            <StatRow label="Go" value={heartbeat.go_version} />
+          </>
+        ) : (
+          <p className="text-xs text-vsc-muted">Waiting...</p>
+        ),
+      connections: () =>
+        stats ? (
+          <>
+            <StatRow
+              label="Total"
+              value={stats.connections.total.toLocaleString()}
+              accent
+            />
+            <StatRow
+              label="Active"
+              value={stats.connections.active.toLocaleString()}
+            />
+          </>
+        ) : (
+          <p className="text-xs text-vsc-muted">Waiting...</p>
+        ),
+      traffic: () =>
+        stats ? (
+          <>
+            <StatRow
+              label="Requests"
+              value={stats.traffic.total_requests.toLocaleString()}
+              accent
+            />
+            <StatRow label="Req/sec" value={reqRate} />
+            <StatRow
+              label="Blocked"
+              value={stats.traffic.total_blocked.toLocaleString()}
+            />
+            <StatRow
+              label="Bytes In"
+              value={formatBytes(stats.traffic.total_bytes_in)}
+            />
+            <StatRow
+              label="Bytes Out"
+              value={formatBytes(stats.traffic.total_bytes_out)}
+            />
+            <StatRow
+              label="In/sec"
+              value={formatBytes(Number(bytesInRate))}
+            />
+          </>
+        ) : (
+          <p className="text-xs text-vsc-muted">Waiting...</p>
+        ),
+      blocking: () =>
+        stats ? (
+          <>
+            <StatRow
+              label="Blocked"
+              value={stats.blocking.blocks_total.toLocaleString()}
+              accent
+            />
+            <StatRow
+              label="Allowed"
+              value={stats.blocking.allows_total.toLocaleString()}
+            />
+            <StatRow
+              label="Blocklist"
+              value={`${stats.blocking.blocklist_size.toLocaleString()} domains`}
+            />
+            <StatRow
+              label="Allowlist"
+              value={`${stats.blocking.allowlist_size.toLocaleString()} entries`}
+            />
+            <StatRow
+              label="Sources"
+              value={stats.blocking.blocklist_sources.toString()}
+            />
+          </>
+        ) : (
+          <p className="text-xs text-vsc-muted">Waiting...</p>
+        ),
+      mitm: () =>
+        stats?.mitm.enabled ? (
+          <>
             <StatRow
               label="Intercepts"
               value={stats.mitm.intercepts_total.toLocaleString()}
@@ -238,77 +256,218 @@ export default function Stats() {
               label="Domains"
               value={stats.mitm.domains_configured.toString()}
             />
-          </StatCard>
-        )}
-
-        {/* Plugins */}
-        {stats && stats.plugins.active > 0 && (
-          <StatCard title="Plugins">
+          </>
+        ) : null,
+      plugins: () =>
+        stats && stats.plugins.active > 0 ? (
+          <>
             <StatRow label="Active" value={stats.plugins.active.toString()} />
             {stats.plugins.filters.map((f) => (
-              <div key={f.name} className="mt-2 border-t border-vsc-border pt-2">
-                <div className="text-xs text-vsc-accent">{f.name}@{f.version}</div>
-                <StatRow label="Inspected" value={f.responses_inspected.toLocaleString()} />
-                <StatRow label="Matched" value={f.responses_matched.toLocaleString()} />
-                <StatRow label="Modified" value={f.responses_modified.toLocaleString()} />
+              <div
+                key={f.name}
+                className="mt-2 border-t border-vsc-border pt-2"
+              >
+                <div className="text-xs text-vsc-accent">
+                  {f.name}@{f.version}
+                </div>
+                <StatRow
+                  label="Inspected"
+                  value={f.responses_inspected.toLocaleString()}
+                />
+                <StatRow
+                  label="Matched"
+                  value={f.responses_matched.toLocaleString()}
+                />
+                <StatRow
+                  label="Modified"
+                  value={f.responses_modified.toLocaleString()}
+                />
               </div>
             ))}
-          </StatCard>
-        )}
+          </>
+        ) : null,
+    }),
+    [heartbeat, stats, reqRate, bytesInRate],
+  );
+
+  const cardTitles: Record<string, string> = {
+    server: "Server",
+    connections: "Connections",
+    traffic: "Traffic",
+    blocking: "Blocking",
+    mitm: "MITM Interception",
+    plugins: "Plugins",
+  };
+
+  // Charts for stat cards
+  const cardCharts: Record<string, React.ReactNode> = {
+    traffic: (
+      <LineChart
+        data={trafficHistory.current}
+        label="req/sec"
+      />
+    ),
+  };
+
+  // Determine which cards are available (have content to show)
+  const availableCards = Object.keys(cardRenderers).filter((id) => {
+    if (id === "mitm") return stats?.mitm.enabled;
+    if (id === "plugins") return stats && stats.plugins.active > 0;
+    return true;
+  });
+
+  const orderedCards = layout.getCardOrder(availableCards);
+
+  // Build table definitions
+  const buildTableDefs = useCallback(() => {
+    if (!stats) return [];
+    const tables: {
+      id: string;
+      title: string;
+      items: { label: string; value: number }[];
+      chartData?: { label: string; value: number }[];
+    }[] = [
+      {
+        id: "top-blocked",
+        title: "Top Blocked Domains",
+        items: stats.blocking.top_blocked.map((e) => ({
+          label: e.domain,
+          value: e.count,
+        })),
+      },
+      {
+        id: "top-allowed",
+        title: "Top Allowed Domains",
+        items: stats.blocking.top_allowed.map((e) => ({
+          label: e.domain,
+          value: e.count,
+        })),
+      },
+      {
+        id: "top-requested",
+        title: "Top Requested Domains",
+        items: stats.domains.top_requested.map((e) => ({
+          label: e.domain,
+          value: e.count,
+        })),
+      },
+      {
+        id: "top-clients",
+        title: "Top Clients",
+        items: stats.clients.top_by_requests.map((e) => ({
+          label: e.hostname || e.client_ip,
+          value: e.requests,
+        })),
+      },
+    ];
+
+    if (stats.mitm.enabled && stats.mitm.top_intercepted.length > 0) {
+      tables.push({
+        id: "top-intercepted",
+        title: "Top Intercepted Domains",
+        items: stats.mitm.top_intercepted.map((e) => ({
+          label: e.domain,
+          value: e.count,
+        })),
+      });
+    }
+
+    for (const f of stats.plugins.filters) {
+      if (f.top_rules.length > 0) {
+        tables.push({
+          id: `top-plugin-rules-${f.name}`,
+          title: `Top Rules: ${f.name}`,
+          items: f.top_rules.map((r) => ({
+            label: r.rule,
+            value: r.count,
+          })),
+        });
+      }
+    }
+
+    return tables;
+  }, [stats]);
+
+  const tableDefs = buildTableDefs();
+  const availableTables = tableDefs.map((t) => t.id);
+  const orderedTables = layout.getTableOrder(availableTables);
+
+  // IDs that get pie charts
+  const pieChartIds = new Set([
+    "top-blocked",
+    "top-requested",
+    "top-clients",
+  ]);
+
+  return (
+    <div className="space-y-4">
+      {/* Header with reset button */}
+      <div className="flex justify-end">
+        <button
+          onClick={layout.resetLayout}
+          className="text-xs text-vsc-muted hover:text-vsc-accent transition-colors"
+        >
+          Reset Layout
+        </button>
+      </div>
+
+      {/* Stat Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {orderedCards.map((id) => {
+          const content = cardRenderers[id]?.();
+          if (content === null || content === undefined) return null;
+          const hasChart = id in cardCharts;
+          return (
+            <StatCard
+              key={id}
+              title={cardTitles[id] || id}
+              sectionId={id}
+              draggable
+              onDragStart={layout.onDragStart("card", id)}
+              onDragEnd={layout.onDragEnd}
+              onDragOver={layout.onDragOver}
+              onDrop={layout.onDrop("card", id)}
+              chartVisible={hasChart ? layout.isChartVisible(id) : undefined}
+              onToggleChart={hasChart ? () => layout.toggleChart(id) : undefined}
+              chart={hasChart ? cardCharts[id] : undefined}
+            >
+              {content}
+            </StatCard>
+          );
+        })}
       </div>
 
       {/* Top-N Tables */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <TopTable
-            title="Top Blocked Domains"
-            items={stats.blocking.top_blocked.map((e) => ({
-              label: e.domain,
-              value: e.count,
-            }))}
-          />
-          <TopTable
-            title="Top Allowed Domains"
-            items={stats.blocking.top_allowed.map((e) => ({
-              label: e.domain,
-              value: e.count,
-            }))}
-          />
-          <TopTable
-            title="Top Requested Domains"
-            items={stats.domains.top_requested.map((e) => ({
-              label: e.domain,
-              value: e.count,
-            }))}
-          />
-          <TopTable
-            title="Top Clients"
-            items={stats.clients.top_by_requests.map((e) => ({
-              label: e.hostname || e.client_ip,
-              value: e.requests,
-            }))}
-          />
-          {stats.mitm.enabled && stats.mitm.top_intercepted.length > 0 && (
-            <TopTable
-              title="Top Intercepted Domains"
-              items={stats.mitm.top_intercepted.map((e) => ({
-                label: e.domain,
-                value: e.count,
-              }))}
-            />
-          )}
-          {stats.plugins.filters.map((f) =>
-            f.top_rules.length > 0 ? (
+          {orderedTables.map((id) => {
+            const def = tableDefs.find((t) => t.id === id);
+            if (!def) return null;
+            const hasPie = pieChartIds.has(id);
+            return (
               <TopTable
-                key={f.name}
-                title={`Top Rules: ${f.name}`}
-                items={f.top_rules.map((r) => ({
-                  label: r.rule,
-                  value: r.count,
-                }))}
+                key={id}
+                title={def.title}
+                items={def.items}
+                draggable
+                onDragStart={layout.onDragStart("table", id)}
+                onDragEnd={layout.onDragEnd}
+                onDragOver={layout.onDragOver}
+                onDrop={layout.onDrop("table", id)}
+                chartVisible={
+                  hasPie ? layout.isChartVisible(id) : undefined
+                }
+                onToggleChart={
+                  hasPie ? () => layout.toggleChart(id) : undefined
+                }
+                chart={
+                  hasPie ? (
+                    <PieChart data={def.items} />
+                  ) : undefined
+                }
               />
-            ) : null,
-          )}
+            );
+          })}
         </div>
       )}
     </div>

@@ -521,6 +521,13 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.0 — 2026-02-17
+
+- fix: anchor links in README (About page) now scroll to target headings instead of opening blank tabs
+- feat: draggable dashboard sections — reorder stat cards and top-N tables via drag-and-drop, layout persisted to localStorage
+- feat: inline charts — traffic req/sec line graph (rolling 3-minute window) and top-N pie charts for blocked domains, requested domains, and clients
+- charts toggle per-section with visibility persisted alongside layout; default hidden to preserve existing text-only view
+
 ### v1.2.3 — 2026-02-17
 
 - docs: README intro rewritten to describe the three-layer filtering architecture, deployment modes, and tested platforms
