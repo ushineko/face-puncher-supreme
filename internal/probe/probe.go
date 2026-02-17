@@ -59,21 +59,31 @@ type PluginsData struct {
 	Plugins []PluginInfo
 }
 
+// TransparentData holds transparent proxy metadata for responses.
+type TransparentData struct {
+	Enabled   bool
+	HTTPAddr  string
+	HTTPSAddr string
+}
+
 // HeartbeatResponse is the JSON structure returned by /fps/heartbeat.
 type HeartbeatResponse struct {
-	Status        string   `json:"status"`
-	Service       string   `json:"service"`
-	Version       string   `json:"version"`
-	Mode          string   `json:"mode"`
-	MITMEnabled   bool     `json:"mitm_enabled"`
-	MITMDomains   int      `json:"mitm_domains"`
-	PluginsActive int      `json:"plugins_active"`
-	Plugins       []string `json:"plugins"`
-	UptimeSeconds int64    `json:"uptime_seconds"`
-	OS            string   `json:"os"`
-	Arch          string   `json:"arch"`
-	GoVersion     string   `json:"go_version"`
-	StartedAt     string   `json:"started_at"`
+	Status             string   `json:"status"`
+	Service            string   `json:"service"`
+	Version            string   `json:"version"`
+	Mode               string   `json:"mode"`
+	MITMEnabled        bool     `json:"mitm_enabled"`
+	MITMDomains        int      `json:"mitm_domains"`
+	TransparentEnabled bool     `json:"transparent_enabled"`
+	TransparentHTTP    string   `json:"transparent_http,omitempty"`
+	TransparentHTTPS   string   `json:"transparent_https,omitempty"`
+	PluginsActive      int      `json:"plugins_active"`
+	Plugins            []string `json:"plugins"`
+	UptimeSeconds      int64    `json:"uptime_seconds"`
+	OS                 string   `json:"os"`
+	Arch               string   `json:"arch"`
+	GoVersion          string   `json:"go_version"`
+	StartedAt          string   `json:"started_at"`
 }
 
 // StatsResponse is the JSON structure returned by /fps/stats.
@@ -81,10 +91,21 @@ type StatsResponse struct {
 	Connections ConnectionsBlock `json:"connections"`
 	Blocking    BlockingBlock    `json:"blocking"`
 	MITM        MITMBlock        `json:"mitm"`
+	Transparent TransparentBlock `json:"transparent"`
 	Plugins     PluginsBlock     `json:"plugins"`
 	Domains     DomainsBlock     `json:"domains"`
 	Clients     ClientsBlock     `json:"clients"`
 	Traffic     TrafficBlock     `json:"traffic"`
+}
+
+// TransparentBlock holds transparent proxy statistics.
+type TransparentBlock struct {
+	Enabled      bool  `json:"enabled"`
+	HTTPRequests int64 `json:"http_requests"`
+	HTTPSTunnels int64 `json:"https_tunnels"`
+	HTTPSMITM    int64 `json:"https_mitm"`
+	Blocked      int64 `json:"blocked"`
+	SNIMissing   int64 `json:"sni_missing"`
 }
 
 // PluginsBlock holds plugin filter statistics.
@@ -165,7 +186,10 @@ type TrafficBlock struct {
 }
 
 // BuildHeartbeat constructs a HeartbeatResponse from the given data sources.
-func BuildHeartbeat(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData, pluginsFn func() *PluginsData) HeartbeatResponse {
+func BuildHeartbeat(
+	info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData,
+	transparentFn func() *TransparentData, pluginsFn func() *PluginsData,
+) HeartbeatResponse {
 	mode := "passthrough"
 	if blockFn != nil {
 		if bd := blockFn(); bd != nil && bd.Size > 0 {
@@ -179,6 +203,16 @@ func BuildHeartbeat(info ServerInfo, blockFn func() *BlockData, mitmFn func() *M
 		if md := mitmFn(); md != nil {
 			mitmEnabled = md.Enabled
 			mitmDomains = md.DomainsConfigured
+		}
+	}
+
+	var transparentEnabled bool
+	var transparentHTTP, transparentHTTPS string
+	if transparentFn != nil {
+		if td := transparentFn(); td != nil {
+			transparentEnabled = td.Enabled
+			transparentHTTP = td.HTTPAddr
+			transparentHTTPS = td.HTTPSAddr
 		}
 	}
 
@@ -197,27 +231,33 @@ func BuildHeartbeat(info ServerInfo, blockFn func() *BlockData, mitmFn func() *M
 	}
 
 	return HeartbeatResponse{
-		Status:        "ok",
-		Service:       "face-puncher-supreme",
-		Version:       version.Short(),
-		Mode:          mode,
-		MITMEnabled:   mitmEnabled,
-		MITMDomains:   mitmDomains,
-		PluginsActive: pluginsActive,
-		Plugins:       pluginList,
-		UptimeSeconds: int64(info.Uptime().Seconds()),
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		GoVersion:     runtime.Version(),
-		StartedAt:     info.StartedAt().UTC().Format(time.RFC3339),
+		Status:             "ok",
+		Service:            "face-puncher-supreme",
+		Version:            version.Short(),
+		Mode:               mode,
+		MITMEnabled:        mitmEnabled,
+		MITMDomains:        mitmDomains,
+		TransparentEnabled: transparentEnabled,
+		TransparentHTTP:    transparentHTTP,
+		TransparentHTTPS:   transparentHTTPS,
+		PluginsActive:      pluginsActive,
+		Plugins:            pluginList,
+		UptimeSeconds:      int64(info.Uptime().Seconds()),
+		OS:                 runtime.GOOS,
+		Arch:               runtime.GOARCH,
+		GoVersion:          runtime.Version(),
+		StartedAt:          info.StartedAt().UTC().Format(time.RFC3339),
 	}
 }
 
 // HeartbeatHandler returns an http.HandlerFunc for the heartbeat endpoint.
 // No database queries, no sorting — just reads atomics and static values.
-func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData, pluginsFn func() *PluginsData) http.HandlerFunc {
+func HeartbeatHandler(
+	info ServerInfo, blockFn func() *BlockData, mitmFn func() *MITMData,
+	transparentFn func() *TransparentData, pluginsFn func() *PluginsData,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		resp := BuildHeartbeat(info, blockFn, mitmFn, pluginsFn)
+		resp := BuildHeartbeat(info, blockFn, mitmFn, transparentFn, pluginsFn)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // best-effort response
@@ -226,13 +266,14 @@ func HeartbeatHandler(info ServerInfo, blockFn func() *BlockData, mitmFn func() 
 
 // StatsProvider supplies data for the full stats response.
 type StatsProvider struct {
-	Info      ServerInfo
-	BlockFn   func() *BlockData
-	MITMFn    func() *MITMData
-	PluginsFn func() *PluginsData
-	StatsDB   *stats.DB
-	Collector *stats.Collector
-	Resolver  *ReverseDNS
+	Info          ServerInfo
+	BlockFn       func() *BlockData
+	MITMFn        func() *MITMData
+	TransparentFn func() *TransparentData
+	PluginsFn     func() *PluginsData
+	StatsDB       *stats.DB
+	Collector     *stats.Collector
+	Resolver      *ReverseDNS
 }
 
 // BuildStats constructs a StatsResponse from the given data sources.
@@ -317,6 +358,18 @@ func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse 
 
 	pluginsBlock := buildPluginsBlock(sp, n)
 
+	transparentBlock := TransparentBlock{}
+	if sp.TransparentFn != nil {
+		if td := sp.TransparentFn(); td != nil {
+			transparentBlock.Enabled = td.Enabled
+		}
+	}
+	transparentBlock.HTTPRequests = sp.Collector.TransparentHTTP.Load()
+	transparentBlock.HTTPSTunnels = sp.Collector.TransparentTLS.Load()
+	transparentBlock.HTTPSMITM = sp.Collector.TransparentMITM.Load()
+	transparentBlock.Blocked = sp.Collector.TransparentBlock.Load()
+	transparentBlock.SNIMissing = sp.Collector.SNIMissing.Load()
+
 	return StatsResponse{
 		Connections: ConnectionsBlock{
 			Total:  sp.Info.ConnectionsTotal(),
@@ -331,8 +384,9 @@ func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse 
 			TopBlocked:       topBlocked,
 			TopAllowed:       topAllowed,
 		},
-		MITM:    mitmBlock,
-		Plugins: pluginsBlock,
+		MITM:        mitmBlock,
+		Transparent: transparentBlock,
+		Plugins:     pluginsBlock,
 		Domains: DomainsBlock{
 			TopRequested: topRequested,
 		},

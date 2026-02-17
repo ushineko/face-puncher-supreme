@@ -30,6 +30,7 @@ type Config struct {
 	Blocklist     []string              `yaml:"blocklist"`
 	Allowlist     []string              `yaml:"allowlist"`
 	MITM          MITM                  `yaml:"mitm"`
+	Transparent   Transparent            `yaml:"transparent"`
 	Plugins       map[string]PluginConf `yaml:"plugins"`
 	Timeouts      Timeouts              `yaml:"timeouts"`
 	Management    Management            `yaml:"management"`
@@ -51,6 +52,13 @@ type MITM struct {
 	CACert  string   `yaml:"ca_cert"`
 	CAKey   string   `yaml:"ca_key"`
 	Domains []string `yaml:"domains"`
+}
+
+// Transparent holds transparent proxy listener configuration.
+type Transparent struct {
+	Enabled   bool   `yaml:"enabled"`
+	HTTPAddr  string `yaml:"http_addr"`
+	HTTPSAddr string `yaml:"https_addr"`
 }
 
 // Timeouts holds proxy timeout configuration.
@@ -87,6 +95,11 @@ func Default() Config {
 		MITM: MITM{
 			CACert: "ca-cert.pem",
 			CAKey:  "ca-key.pem",
+		},
+		Transparent: Transparent{
+			Enabled:   false,
+			HTTPAddr:  ":18780",
+			HTTPSAddr: ":18443",
 		},
 		Timeouts: Timeouts{
 			Shutdown:   Duration{5 * time.Second},
@@ -190,6 +203,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, validateBlocklist(c.Blocklist)...)
 	errs = append(errs, validateAllowlist(c.Allowlist)...)
 	errs = append(errs, validateMITM(c.MITM)...)
+	errs = append(errs, validateTransparent(c.Transparent, c.Listen)...)
 	errs = append(errs, validatePlugins(c.Plugins)...)
 
 	// Durations must be positive.
@@ -280,6 +294,41 @@ func validateMITM(m MITM) []string {
 			errs = append(errs, fmt.Sprintf("mitm.domains[%d]: invalid domain %q", i, d))
 		}
 	}
+	return errs
+}
+
+// validateTransparent checks transparent proxy configuration.
+func validateTransparent(t Transparent, listenAddr string) []string {
+	var errs []string
+	if !t.Enabled {
+		return errs
+	}
+
+	if t.HTTPAddr == "" && t.HTTPSAddr == "" {
+		errs = append(errs, "transparent: at least one of http_addr or https_addr must be set when enabled")
+		return errs
+	}
+
+	if t.HTTPAddr != "" {
+		if _, err := net.ResolveTCPAddr("tcp", t.HTTPAddr); err != nil {
+			errs = append(errs, fmt.Sprintf("transparent.http_addr: invalid address %q: %v", t.HTTPAddr, err))
+		} else if t.HTTPAddr == listenAddr {
+			errs = append(errs, fmt.Sprintf("transparent.http_addr: conflicts with listen address %q", listenAddr))
+		}
+	}
+
+	if t.HTTPSAddr != "" {
+		if _, err := net.ResolveTCPAddr("tcp", t.HTTPSAddr); err != nil {
+			errs = append(errs, fmt.Sprintf("transparent.https_addr: invalid address %q: %v", t.HTTPSAddr, err))
+		} else if t.HTTPSAddr == listenAddr {
+			errs = append(errs, fmt.Sprintf("transparent.https_addr: conflicts with listen address %q", listenAddr))
+		}
+	}
+
+	if t.HTTPAddr != "" && t.HTTPSAddr != "" && t.HTTPAddr == t.HTTPSAddr {
+		errs = append(errs, fmt.Sprintf("transparent: http_addr and https_addr must differ, both are %q", t.HTTPAddr))
+	}
+
 	return errs
 }
 

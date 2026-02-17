@@ -41,6 +41,16 @@ This document is a communication channel between the Linux development environme
 - .local hostname resolution: works (no raw IP needed)
 - Setup friction: iOS cert trust flow is multi-step (download, install profile, enable trust separately)
 
+### Verified Working (iPad Pro 13" M5, iPadOS 26.2)
+
+- Same results as iPhone — full stack verified
+
+### Verified Working (Windows 11 Pro, Vivaldi, via transparent proxy + virbr0)
+
+- MITM TLS interception: Reddit loads without errors after CA trust
+- Transparent proxy mode: traffic routed through virbr0 NAT bridge
+- Note: Pi-hole DNS blocking must not overlap with fpsd MITM domains (reddit.com was blocked by Pi-hole gambling/social list)
+
 ### Verified Working (macOS 26.3 + Safari)
 
 - Domain blocking: Apple News ads suppressed (`news.iadsdk.apple.com` blocked)

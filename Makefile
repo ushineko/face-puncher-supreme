@@ -1,4 +1,4 @@
-.PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint
+.PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint install uninstall
 
 BINARY := fpsd
 VERSION := 1.0.0
@@ -45,6 +45,12 @@ coverage:
 clean:
 	rm -f $(BINARY) coverage.out coverage.html
 	rm -rf web/ui/dist web/ui/node_modules
+
+install: build
+	./scripts/fps-ctl install
+
+uninstall:
+	./scripts/fps-ctl uninstall
 
 setup: install-lint
 	go mod download

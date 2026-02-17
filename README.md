@@ -13,8 +13,10 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [MITM TLS Interception](#mitm-tls-interception)
 - [Content Filter Plugins](#content-filter-plugins)
 - [Web Dashboard](#web-dashboard)
+- [Transparent Proxying](#transparent-proxying)
 - [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
+- [Install / Uninstall](#install--uninstall)
 - [Test](#test)
 - [Lint](#lint)
 - [Project Structure](#project-structure)
@@ -245,6 +247,41 @@ make build-go    # Go-only rebuild (reuses existing UI dist, re-copies README)
 
 The React frontend is built with Vite + TypeScript + Tailwind CSS v4. Production bundle is ~97 KB gzipped.
 
+## Transparent Proxying
+
+Transparent proxying accepts connections redirected by iptables without any client-side proxy configuration. Devices on the LAN send traffic to their default gateway; iptables REDIRECT rules send port 80/443 to fpsd's transparent listeners.
+
+**Enable in config** (`fpsd.yml`):
+
+```yaml
+transparent:
+  enabled: true
+  http_addr: ":18780"    # Receives redirected port 80 traffic
+  https_addr: ":18443"   # Receives redirected port 443 traffic
+```
+
+**How it works**:
+
+- **HTTP** (port 80): fpsd reads the HTTP request, extracts the `Host` header (or falls back to `SO_ORIGINAL_DST`), checks the blocklist, and forwards to the upstream server.
+- **HTTPS** (port 443): fpsd peeks at the TLS ClientHello to extract the SNI server name. Blocked domains get a TCP close. MITM-configured domains are intercepted. All other traffic is tunneled with the ClientHello replayed to upstream.
+
+**iptables rules** (applied by `fps-ctl install --transparent`):
+
+```bash
+# Redirect LAN traffic to fpsd transparent ports
+iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 80  -j REDIRECT --to-port 18780
+iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 443 -j REDIRECT --to-port 18443
+
+# Loop prevention — skip fpsd's own outbound traffic
+iptables -t nat -A OUTPUT -m owner --uid-owner $(id -u) -p tcp --dport 80  -j RETURN
+iptables -t nat -A OUTPUT -m owner --uid-owner $(id -u) -p tcp --dport 443 -j RETURN
+
+# Enable IP forwarding
+sysctl -w net.ipv4.ip_forward=1
+```
+
+Replace `eth0` with your LAN interface. The `fps-ctl` installer handles all of this automatically.
+
 ## Management Endpoints
 
 ### `/fps/heartbeat` — Health Check
@@ -279,6 +316,51 @@ Stats are persisted to `stats.db` via periodic flush (default 60s) and survive r
 
 Download the MITM CA certificate for client installation. Returns 404 when MITM is not configured.
 
+```bash
+curl -O http://<proxy-host>:18737/fps/ca.pem
+```
+
+Or open the URL in a browser on the client device.
+
+#### macOS
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.pem
+```
+
+Or: double-click `ca.pem` → Keychain Access opens → select **System** keychain → enter password → double-click the certificate → expand **Trust** → set **When using this certificate** to **Always Trust**.
+
+#### iOS / iPadOS
+
+1. In Safari, navigate to `http://<proxy-host>:18737/fps/ca.pem`
+2. Tap **Allow** when prompted to download the profile
+3. Go to **Settings → General → VPN & Device Management** → tap the downloaded profile → **Install**
+4. Go to **Settings → General → About → Certificate Trust Settings** → enable full trust for **Face Puncher Supreme CA**
+
+#### Windows
+
+**GUI**: Download `ca.pem` from the browser → double-click → **Install Certificate** → **Local Machine** → **Place all certificates in the following store** → browse to **Trusted Root Certification Authorities** → Finish → accept the security warning.
+
+**PowerShell (Admin)**:
+
+```powershell
+Invoke-WebRequest -Uri http://<proxy-host>:18737/fps/ca.pem -OutFile $env:TEMP\fps-ca.pem
+Import-Certificate -FilePath $env:TEMP\fps-ca.pem -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+#### Linux (Debian/Ubuntu)
+
+```bash
+sudo cp ca.pem /usr/local/share/ca-certificates/fps-ca.crt
+sudo update-ca-certificates
+```
+
+#### Linux (Arch/Fedora)
+
+```bash
+sudo trust anchor --store ca.pem
+```
+
 ## Logging
 
 Logs are written to both stderr (text format) and a rotated JSON log file:
@@ -286,6 +368,57 @@ Logs are written to both stderr (text format) and a rotated JSON log file:
 - **File**: `<log-dir>/fpsd.log`
 - **Rotation**: 10MB per file, 3 backups, 7-day retention, gzip compressed
 - **Verbose mode** (`--verbose`): Logs full request/response headers, User-Agent, body sizes, and byte counts for CONNECT tunnels
+
+## Install / Uninstall
+
+`fps-ctl` installs fpsd as a systemd user service. The proxy runs as the current user with no root privileges. Transparent proxy iptables rules are optional and require sudo.
+
+```bash
+# Build and install
+make install
+
+# Or step by step:
+make build
+./scripts/fps-ctl install
+
+# With transparent proxy on a specific interface
+./scripts/fps-ctl install --transparent --interface eth0
+
+# Multiple interfaces (e.g. LAN + VM bridge)
+./scripts/fps-ctl install --transparent --interface eth0,virbr0
+
+# Check status
+./scripts/fps-ctl status
+
+# Uninstall (keeps config and data by default)
+./scripts/fps-ctl uninstall
+
+# Uninstall everything including config and data
+./scripts/fps-ctl uninstall --purge
+```
+
+**Installed layout** (XDG Base Directory):
+
+| Path | Purpose |
+| ---- | ------- |
+| `~/.local/bin/fpsd` | Binary |
+| `~/.config/fpsd/fpsd.yml` | Configuration |
+| `~/.local/share/fpsd/` | Data (blocklist.db, stats.db, CA certs) |
+| `~/.local/share/fpsd/logs/` | Log files |
+| `~/.config/systemd/user/fpsd.service` | Systemd user service |
+| `/etc/systemd/system/fpsd-tproxy.service` | iptables rules (if transparent proxy enabled) |
+
+**Upgrade**: Running `fps-ctl install` on an existing installation updates the binary and service unit without overwriting the config file.
+
+**Service management**:
+
+```bash
+systemctl --user status fpsd         # Check service
+systemctl --user restart fpsd        # Restart after config change
+journalctl --user -u fpsd -f         # Follow logs
+sudo systemctl stop fpsd-tproxy      # Remove iptables rules temporarily
+sudo systemctl start fpsd-tproxy     # Re-apply iptables rules
+```
 
 ## Test
 
@@ -310,25 +443,51 @@ Uses golangci-lint v2 with a versioned binary (auto-installed on first run). Con
 ## Project Structure
 
 ```
-cmd/fpsd/           Daemon entrypoint (Cobra CLI)
-internal/config/    YAML config loading, validation, CLI merge
-internal/proxy/     Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
-internal/blocklist/ Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
-internal/mitm/      Per-domain TLS interception (CA, leaf certs, HTTP proxy loop)
-internal/plugin/    Content filter plugin architecture (registry, interception, markers)
-internal/probe/     Management endpoints (heartbeat + stats)
-internal/stats/     In-memory counters and SQLite stats persistence
-internal/logging/   Structured logging with file rotation
-internal/logbuf/    Circular buffer slog.Handler for dashboard log viewer
-internal/version/   Build-time version info
-web/                Dashboard HTTP server, auth, WebSocket hub, SPA handler
-web/ui/             React frontend (Vite + TypeScript + Tailwind CSS)
-specs/              Project specifications
-agents/             Cross-system testing guides
-fpsd.yml            Reference configuration with defaults and blocklist URLs
+cmd/fpsd/              Daemon entrypoint (Cobra CLI)
+internal/config/       YAML config loading, validation, CLI merge
+internal/proxy/        Proxy server (HTTP forward, HTTPS CONNECT tunnel, domain blocking)
+internal/transparent/  Transparent proxy (iptables REDIRECT, SNI extraction, SO_ORIGINAL_DST)
+internal/blocklist/    Domain blocklist (SQLite DB, parser, fetcher, in-memory cache)
+internal/mitm/         Per-domain TLS interception (CA, leaf certs, HTTP proxy loop)
+internal/plugin/       Content filter plugin architecture (registry, interception, markers)
+internal/probe/        Management endpoints (heartbeat + stats)
+internal/stats/        In-memory counters and SQLite stats persistence
+internal/logging/      Structured logging with file rotation
+internal/logbuf/       Circular buffer slog.Handler for dashboard log viewer
+internal/version/      Build-time version info
+web/                   Dashboard HTTP server, auth, WebSocket hub, SPA handler
+web/ui/                React frontend (Vite + TypeScript + Tailwind CSS)
+scripts/               Installer/uninstaller (fps-ctl)
+specs/                 Project specifications
+agents/                Cross-system testing guides
+fpsd.yml               Reference configuration with defaults and blocklist URLs
 ```
 
 ## Changelog
+
+### v1.1.0 — 2026-02-17
+
+- Transparent proxying: accepts iptables-redirected HTTP/HTTPS traffic without client proxy config (spec 010)
+- Dual transparent listeners: HTTP (:18780) and HTTPS (:18443), independent of the explicit proxy
+- TLS ClientHello SNI extraction for HTTPS destination routing without decryption
+- `SO_ORIGINAL_DST` fallback for connections without SNI (Linux-specific, build-tagged)
+- `prefixConn` wrapper replays peeked ClientHello bytes to MITM handler or upstream
+- Transparent stats: `transparent_http`, `transparent_tls`, `transparent_mitm`, `transparent_block`, `sni_missing` counters
+- Heartbeat shows `transparent_enabled`, `transparent_http`, `transparent_https` fields
+- Config validation: port conflict detection, address format checks, http/https addr uniqueness
+- `fps-ctl` installer/uninstaller script for systemd user service deployment (spec 011)
+- `fps-ctl install`: creates XDG directory layout, copies binary/config/CA certs, writes systemd unit, enables linger
+- `fps-ctl install --transparent --interface IF[,IF2,...]`: writes system service for iptables rules with loop prevention (comma-separated for multiple interfaces)
+- `fps-ctl uninstall`: stops services, removes iptables rules, cleans up files (`--purge` for full removal)
+- `fps-ctl status`: shows binary, service, transparent proxy, and connectivity status
+- Systemd hardening: `ProtectHome=tmpfs`, `ProtectSystem=strict`, `NoNewPrivileges`, bind-mounted config/data
+- Idempotent install: upgrade path preserves config, updates binary and service unit
+- `make install` and `make uninstall` Makefile targets
+- Multi-interface support: `--interface eno2,virbr0` applies iptables rules to multiple interfaces (LAN + VM bridges)
+- CA certificate installation docs for macOS, iOS/iPadOS, Windows, and Linux
+- 12 new transparent proxy tests (SNI parsing, prefixConn, real TLS ClientHello validation)
+- 128 total tests (all passing), 0 lint issues
+- Verified on: iPhone 17 Pro Max (iOS 26.2.1), iPad Pro 13" M5 (iPadOS 26.2), Windows 11 Pro (Vivaldi, transparent mode), macOS 26.3 (Safari)
 
 ### v1.0.0 — 2026-02-16
 

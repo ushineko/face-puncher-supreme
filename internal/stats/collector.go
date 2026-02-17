@@ -41,6 +41,13 @@ type Collector struct {
 	pluginMatched   sync.Map // string -> *atomic.Int64
 	pluginModified  sync.Map // string -> *atomic.Int64
 	pluginRules     sync.Map // "plugin:rule" -> *atomic.Int64
+
+	// Transparent proxy counters.
+	TransparentHTTP  atomic.Int64
+	TransparentTLS   atomic.Int64
+	TransparentMITM  atomic.Int64
+	TransparentBlock atomic.Int64
+	SNIMissing       atomic.Int64
 }
 
 // NewCollector creates a new in-memory stats collector.

@@ -49,6 +49,14 @@ stats:
   enabled: true          # set to false to disable stats collection entirely
   flush_interval: "60s"  # how often in-memory counters are flushed to stats.db
 
+# Transparent proxy — accepts iptables-redirected HTTP/HTTPS traffic.
+# Requires iptables REDIRECT rules to send port 80/443 traffic to these ports.
+# See README or spec 010 for iptables configuration examples.
+transparent:
+  enabled: true
+  http_addr: ":18780"    # Transparent HTTP port (iptables redirects port 80 here)
+  https_addr: ":18443"   # Transparent HTTPS port (iptables redirects port 443 here)
+
 # MITM — per-domain TLS interception for content-level ad blocking.
 # Requires CA cert: run `fpsd generate-ca` first, then install CA on clients.
 mitm:

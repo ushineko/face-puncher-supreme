@@ -1,0 +1,724 @@
+#!/usr/bin/env bash
+# fps-ctl — install, uninstall, and manage the fpsd proxy service.
+#
+# Usage:
+#   fps-ctl install   [--transparent | --no-transparent] [--interface IF[,IF2,...]] [--yes]
+#   fps-ctl uninstall [--purge] [--yes]
+#   fps-ctl status
+#
+# Runs fpsd as a systemd user service (no root). Transparent proxy iptables
+# rules are optional and require sudo.
+
+set -euo pipefail
+
+# ─── Constants ──────────────────────────────────────────────────────────
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BIN_DIR="$HOME/.local/bin"
+CONFIG_DIR="$HOME/.config/fpsd"
+DATA_DIR="$HOME/.local/share/fpsd"
+LOG_DIR="$DATA_DIR/logs"
+UNIT_DIR="$HOME/.config/systemd/user"
+TPROXY_UNIT="/etc/systemd/system/fpsd-tproxy.service"
+
+BINARY_SRC="$SOURCE_DIR/fpsd"
+BINARY_DST="$BIN_DIR/fpsd"
+CONFIG_SRC="$SOURCE_DIR/fpsd.yml"
+CONFIG_DST="$CONFIG_DIR/fpsd.yml"
+UNIT_DST="$UNIT_DIR/fpsd.service"
+
+SERVICE_NAME="fpsd.service"
+TPROXY_SERVICE="fpsd-tproxy.service"
+
+DEFAULT_HTTP_PORT="18780"
+DEFAULT_HTTPS_PORT="18443"
+DEFAULT_LISTEN_PORT="18737"
+
+# ─── CLI Parsing ────────────────────────────────────────────────────────
+
+CMD=""
+OPT_TRANSPARENT=""    # "" = ask, "yes" = --transparent, "no" = --no-transparent
+OPT_INTERFACE=""
+OPT_PURGE=false
+OPT_YES=false
+
+usage() {
+    cat <<'EOF'
+Usage: fps-ctl <command> [options]
+
+Commands:
+  install       Install fpsd as a systemd user service
+  uninstall     Remove fpsd service, iptables rules, and optionally data
+  status        Show installation status and service health
+
+Install options:
+  --transparent       Set up transparent proxy iptables rules (needs sudo)
+  --no-transparent    Skip transparent proxy setup
+  --interface IF      Interface(s) for iptables rules, comma-separated (e.g. eno2,virbr0)
+  --yes               Answer yes to all prompts
+
+Uninstall options:
+  --purge             Remove config and data without asking
+  --yes               Answer yes to all prompts
+EOF
+}
+
+parse_args() {
+    if [[ $# -lt 1 ]]; then
+        usage
+        exit 1
+    fi
+
+    CMD="$1"
+    shift
+
+    case "$CMD" in
+        install|uninstall|status) ;;
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "error: unknown command '$CMD'"
+            usage
+            exit 1
+            ;;
+    esac
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --transparent)    OPT_TRANSPARENT="yes"; shift ;;
+            --no-transparent) OPT_TRANSPARENT="no"; shift ;;
+            --interface)
+                if [[ $# -lt 2 ]]; then echo "error: --interface requires an argument"; exit 1; fi
+                OPT_INTERFACE="$2"; shift 2
+                ;;
+            --purge)  OPT_PURGE=true; shift ;;
+            --yes|-y) OPT_YES=true; shift ;;
+            *)
+                echo "error: unknown option '$1'"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# ─── Helpers ────────────────────────────────────────────────────────────
+
+info()  { echo "  [+] $*"; }
+warn()  { echo "  [!] $*" >&2; }
+err()   { echo "  [x] $*" >&2; }
+step()  { echo ""; echo "==> $*"; }
+
+confirm() {
+    local prompt="$1"
+    if $OPT_YES; then return 0; fi
+    read -rp "  $prompt [y/N] " answer
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+# ─── Preflight ──────────────────────────────────────────────────────────
+
+preflight() {
+    step "Preflight checks"
+
+    # Linux only
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        err "fps-ctl requires Linux (detected: $(uname -s))"
+        exit 1
+    fi
+    info "Platform: Linux"
+
+    # systemd available
+    if ! command -v systemctl >/dev/null 2>&1; then
+        err "systemd not found. fps-ctl requires systemd for service management."
+        exit 1
+    fi
+
+    # systemd --user works
+    if ! systemctl --user status >/dev/null 2>&1; then
+        err "systemctl --user is not available."
+        err "This can happen in containers or when D-Bus user session is missing."
+        exit 1
+    fi
+    info "systemd: available (user session)"
+
+    # Binary built
+    if [[ ! -f "$BINARY_SRC" ]]; then
+        err "Binary not found at $BINARY_SRC"
+        err "Run 'make build' first, then re-run this script."
+        exit 1
+    fi
+    info "Binary: $BINARY_SRC ($(file -b "$BINARY_SRC" | cut -d, -f1))"
+
+    # Check PATH
+    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+        warn "$BIN_DIR is not on your PATH."
+        warn "Add it to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+}
+
+# ─── Install ────────────────────────────────────────────────────────────
+
+do_install() {
+    preflight
+
+    local is_upgrade=false
+    if [[ -f "$UNIT_DST" ]]; then
+        is_upgrade=true
+        step "Existing installation detected — upgrading"
+        # Stop service before upgrade
+        if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            info "Stopping $SERVICE_NAME for upgrade..."
+            systemctl --user stop "$SERVICE_NAME"
+        fi
+    fi
+
+    step "Creating directories"
+    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR" "$UNIT_DIR"
+    info "$BIN_DIR"
+    info "$CONFIG_DIR"
+    info "$DATA_DIR"
+    info "$LOG_DIR"
+    info "$UNIT_DIR"
+
+    step "Copying binary"
+    cp "$BINARY_SRC" "$BINARY_DST"
+    chmod 755 "$BINARY_DST"
+    info "$BINARY_DST"
+
+    step "Configuration"
+    if [[ -f "$CONFIG_DST" ]]; then
+        info "Config exists at $CONFIG_DST — preserving (not overwritten)"
+    else
+        if [[ -f "$CONFIG_SRC" ]]; then
+            cp "$CONFIG_SRC" "$CONFIG_DST"
+            # Adjust paths for installed layout.
+            sed -i "s|^data_dir:.*|data_dir: \"$DATA_DIR\"|" "$CONFIG_DST"
+            sed -i "s|^log_dir:.*|log_dir: \"$LOG_DIR\"|" "$CONFIG_DST"
+            sed -i "s|^listen:.*|listen: \"0.0.0.0:$DEFAULT_LISTEN_PORT\"|" "$CONFIG_DST"
+            info "Config written to $CONFIG_DST (paths adjusted for installed layout)"
+        else
+            warn "No config template found at $CONFIG_SRC — skipped"
+        fi
+    fi
+
+    # Copy CA certs if they exist in the source tree and not yet in data dir.
+    for cert_file in ca-cert.pem ca-key.pem; do
+        if [[ -f "$SOURCE_DIR/$cert_file" ]] && [[ ! -f "$DATA_DIR/$cert_file" ]]; then
+            cp "$SOURCE_DIR/$cert_file" "$DATA_DIR/$cert_file"
+            info "Copied $cert_file to $DATA_DIR/"
+        fi
+    done
+
+    step "Writing systemd user service"
+    cat > "$UNIT_DST" <<UNIT
+[Unit]
+Description=Face Puncher Supreme proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/fpsd --config %h/.config/fpsd/fpsd.yml
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=%h/.local/share/fpsd
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fpsd
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/.local/bin/fpsd:%h/.local/bin/fpsd
+BindPaths=%h/.config/fpsd:%h/.config/fpsd
+BindPaths=%h/.local/share/fpsd:%h/.local/share/fpsd
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
+UNIT
+    info "$UNIT_DST"
+
+    step "Enabling and starting service"
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE_NAME" 2>/dev/null
+    info "Service enabled"
+
+    # Enable linger so service runs without active login session.
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl enable-linger "$USER" 2>/dev/null || true
+        info "Linger enabled for $USER"
+    fi
+
+    systemctl --user start "$SERVICE_NAME"
+    info "Service started"
+
+    # Wait briefly for startup.
+    sleep 1
+
+    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        info "Service is running"
+    else
+        warn "Service may still be starting. Check with: systemctl --user status $SERVICE_NAME"
+    fi
+
+    # Transparent proxy setup.
+    setup_transparent
+
+    # Summary.
+    step "Installation complete"
+    if $is_upgrade; then
+        info "Upgraded fpsd binary and service unit"
+    else
+        info "Fresh installation"
+    fi
+    info "Binary:  $BINARY_DST"
+    info "Config:  $CONFIG_DST"
+    info "Data:    $DATA_DIR"
+    info "Logs:    $LOG_DIR"
+    info "Service: systemctl --user status $SERVICE_NAME"
+
+    # Check heartbeat.
+    local hb_port
+    hb_port=$(grep -oP '(?<=listen:\s")([^"]+)' "$CONFIG_DST" 2>/dev/null | grep -oP '\d+$' || echo "$DEFAULT_LISTEN_PORT")
+    if curl -sf "http://localhost:${hb_port}/fps/heartbeat" >/dev/null 2>&1; then
+        local version
+        version=$(curl -sf "http://localhost:${hb_port}/fps/heartbeat" | grep -oP '"version":"[^"]*"' | head -1 || true)
+        info "Heartbeat: OK ($version)"
+    else
+        info "Heartbeat: waiting for service to start..."
+        info "  Check: curl http://localhost:${hb_port}/fps/heartbeat"
+    fi
+
+    echo ""
+    echo "Next steps:"
+    echo "  - View logs:    journalctl --user -u fpsd -f"
+    echo "  - Dashboard:    http://localhost:${hb_port}/fps/dashboard/"
+    echo "  - Status:       fps-ctl status"
+    if [[ ! -f "$DATA_DIR/ca-cert.pem" ]]; then
+        echo "  - Generate CA:  fpsd generate-ca --cert $DATA_DIR/ca-cert.pem --key $DATA_DIR/ca-key.pem"
+    fi
+}
+
+# ─── Transparent Proxy Setup ───────────────────────────────────────────
+
+setup_transparent() {
+    # Determine whether to set up transparent proxy.
+    local do_transparent=false
+
+    if [[ "$OPT_TRANSPARENT" == "yes" ]]; then
+        do_transparent=true
+    elif [[ "$OPT_TRANSPARENT" == "no" ]]; then
+        return 0
+    else
+        # Interactive: ask user.
+        step "Transparent proxy"
+        echo "  Transparent proxying redirects HTTP/HTTPS traffic from LAN devices"
+        echo "  through fpsd using iptables rules. This requires sudo."
+        echo ""
+        if confirm "Set up transparent proxy iptables rules?"; then
+            do_transparent=true
+        else
+            info "Skipping transparent proxy setup"
+            return 0
+        fi
+    fi
+
+    if ! $do_transparent; then return 0; fi
+
+    step "Transparent proxy setup"
+
+    # Probe iptables.
+    if ! command -v iptables >/dev/null 2>&1; then
+        warn "iptables not found. Transparent proxy requires iptables."
+        warn "Install iptables and re-run: fps-ctl install --transparent"
+        return 0
+    fi
+    info "iptables: $(iptables --version 2>/dev/null || echo 'available')"
+
+    # Check nat table (needs sudo).
+    info "Checking iptables nat table access (requires sudo)..."
+    if ! sudo iptables -t nat -L -n >/dev/null 2>&1; then
+        err "Cannot access iptables nat table."
+        err "Check permissions or kernel module (iptable_nat / nf_tables)."
+        return 1
+    fi
+    info "nat table: accessible"
+
+    # Check owner match module.
+    local owner_supported=true
+    # A -C (check) on a non-existent rule returns exit 1; "No chain/target/match" means module missing.
+    if sudo iptables -t nat -C OUTPUT -m owner --uid-owner "$(id -u)" -j RETURN 2>&1 | grep -q "No chain/target/match"; then
+        warn "iptables owner match module not available."
+        warn "Loop prevention rules cannot be installed. Transparent proxy may cause redirect loops."
+        owner_supported=false
+    fi
+    if $owner_supported; then
+        info "owner match: supported"
+    fi
+
+    # IP forwarding.
+    local fwd_current
+    fwd_current=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+    info "IP forwarding: currently $fwd_current"
+
+    # Detect / validate interfaces.
+    # lan_interfaces is a newline-separated list of interfaces to add rules for.
+    local lan_interfaces=""
+    if [[ -n "$OPT_INTERFACE" ]]; then
+        # User-provided: comma-separated → newline-separated.
+        lan_interfaces=$(echo "$OPT_INTERFACE" | tr ',' '\n')
+        while IFS= read -r iface; do
+            if ! ip link show "$iface" >/dev/null 2>&1; then
+                err "Interface '$iface' not found."
+                return 1
+            fi
+        done <<< "$lan_interfaces"
+        info "Interfaces: $(echo "$lan_interfaces" | tr '\n' ',' | sed 's/,$//' ) (user-specified)"
+    else
+        local interfaces
+        interfaces=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2}' | sort -u)
+        local if_count
+        if_count=$(echo "$interfaces" | grep -c . || true)
+
+        if [[ "$if_count" -eq 0 ]]; then
+            err "No network interfaces with IPv4 addresses found."
+            return 1
+        elif [[ "$if_count" -eq 1 ]]; then
+            lan_interfaces="$interfaces"
+            info "Interface: $lan_interfaces (auto-detected)"
+        else
+            echo ""
+            echo "  Multiple network interfaces detected:"
+            local i=1
+            while IFS= read -r iface; do
+                local addr
+                addr=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | head -1)
+                echo "    $i) $iface ($addr)"
+                i=$((i + 1))
+            done <<< "$interfaces"
+            echo ""
+            if $OPT_YES; then
+                err "Multiple interfaces found. Use --interface to specify one or more (comma-separated)."
+                return 1
+            fi
+            read -rp "  Select interface(s) [1-$((i-1)), comma-separated]: " choice
+            for c in $(echo "$choice" | tr ',' ' '); do
+                local picked
+                picked=$(echo "$interfaces" | sed -n "${c}p")
+                if [[ -z "$picked" ]]; then
+                    err "Invalid selection: $c"
+                    return 1
+                fi
+                if [[ -n "$lan_interfaces" ]]; then
+                    lan_interfaces="$lan_interfaces"$'\n'"$picked"
+                else
+                    lan_interfaces="$picked"
+                fi
+            done
+        fi
+    fi
+
+    # Read transparent ports from config, or use defaults.
+    local thttp="$DEFAULT_HTTP_PORT"
+    local thttps="$DEFAULT_HTTPS_PORT"
+    if [[ -f "$CONFIG_DST" ]]; then
+        local parsed
+        parsed=$(grep -oP '(?<=http_addr:\s")[^"]*' "$CONFIG_DST" 2>/dev/null | grep -oP '\d+$' || true)
+        [[ -n "$parsed" ]] && thttp="$parsed"
+        parsed=$(grep -oP '(?<=https_addr:\s")[^"]*' "$CONFIG_DST" 2>/dev/null | grep -oP '\d+$' || true)
+        [[ -n "$parsed" ]] && thttps="$parsed"
+    fi
+
+    local proxy_uid
+    proxy_uid=$(id -u)
+
+    # Show rules to user.
+    echo ""
+    echo "  The following iptables rules will be applied:"
+    echo ""
+    echo "    # Redirect traffic to fpsd transparent ports"
+    while IFS= read -r iface; do
+        echo "    iptables -t nat -A PREROUTING -i $iface -p tcp --dport 80  -j REDIRECT --to-port $thttp"
+        echo "    iptables -t nat -A PREROUTING -i $iface -p tcp --dport 443 -j REDIRECT --to-port $thttps"
+    done <<< "$lan_interfaces"
+    echo ""
+    echo "    # Loop prevention — skip fpsd's own outbound traffic"
+    echo "    iptables -t nat -A OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 80  -j RETURN"
+    echo "    iptables -t nat -A OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 443 -j RETURN"
+    echo ""
+    echo "    # Enable IP forwarding"
+    echo "    sysctl -w net.ipv4.ip_forward=1"
+    echo ""
+
+    if ! $OPT_YES; then
+        if ! confirm "Apply these rules?"; then
+            info "Skipping transparent proxy setup"
+            return 0
+        fi
+    fi
+
+    # Build ExecStart / ExecStop lines for each interface.
+    local exec_start_lines=""
+    local exec_stop_lines=""
+    while IFS= read -r iface; do
+        exec_start_lines+="ExecStart=/usr/sbin/iptables -t nat -A PREROUTING -i $iface -p tcp --dport 80  -j REDIRECT --to-port $thttp
+ExecStart=/usr/sbin/iptables -t nat -A PREROUTING -i $iface -p tcp --dport 443 -j REDIRECT --to-port $thttps
+"
+        exec_stop_lines+="ExecStop=/usr/sbin/iptables -t nat -D PREROUTING -i $iface -p tcp --dport 80  -j REDIRECT --to-port $thttp
+ExecStop=/usr/sbin/iptables -t nat -D PREROUTING -i $iface -p tcp --dport 443 -j REDIRECT --to-port $thttps
+"
+    done <<< "$lan_interfaces"
+
+    # Write system service unit.
+    info "Writing $TPROXY_UNIT (requires sudo)..."
+    sudo tee "$TPROXY_UNIT" > /dev/null <<TPUNIT
+[Unit]
+Description=Face Puncher Supreme transparent proxy iptables rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Apply rules
+${exec_start_lines}ExecStart=/usr/sbin/iptables -t nat -A OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 80  -j RETURN
+ExecStart=/usr/sbin/iptables -t nat -A OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 443 -j RETURN
+ExecStart=/usr/sbin/sysctl -q -w net.ipv4.ip_forward=1
+
+# Remove rules (on stop or shutdown)
+${exec_stop_lines}ExecStop=/usr/sbin/iptables -t nat -D OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 80  -j RETURN
+ExecStop=/usr/sbin/iptables -t nat -D OUTPUT -m owner --uid-owner $proxy_uid -p tcp --dport 443 -j RETURN
+
+[Install]
+WantedBy=multi-user.target
+TPUNIT
+    info "System service unit written"
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$TPROXY_SERVICE" 2>/dev/null
+    sudo systemctl start "$TPROXY_SERVICE"
+    info "Transparent proxy service started"
+
+    # Verify rules applied.
+    if sudo iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "$thttp"; then
+        info "PREROUTING REDIRECT :80  -> :$thttp  [OK]"
+    else
+        warn "PREROUTING REDIRECT :80 rule not detected"
+    fi
+    if sudo iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "$thttps"; then
+        info "PREROUTING REDIRECT :443 -> :$thttps [OK]"
+    else
+        warn "PREROUTING REDIRECT :443 rule not detected"
+    fi
+
+    local fwd_after
+    fwd_after=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+    if [[ "$fwd_after" == "1" ]]; then
+        info "IP forwarding: enabled [OK]"
+    else
+        warn "IP forwarding: still disabled"
+    fi
+}
+
+# ─── Uninstall ──────────────────────────────────────────────────────────
+
+do_uninstall() {
+    step "Uninstalling fpsd"
+
+    local found_anything=false
+
+    # 1. Transparent proxy teardown.
+    if [[ -f "$TPROXY_UNIT" ]]; then
+        found_anything=true
+        step "Removing transparent proxy iptables rules"
+        info "Stopping $TPROXY_SERVICE (requires sudo)..."
+        sudo systemctl stop "$TPROXY_SERVICE" 2>/dev/null || true
+        sudo systemctl disable "$TPROXY_SERVICE" 2>/dev/null || true
+        sudo rm -f "$TPROXY_UNIT"
+        sudo systemctl daemon-reload
+        info "Transparent proxy service removed"
+
+        # Verify rules removed.
+        if sudo iptables -t nat -L PREROUTING -n 2>/dev/null | grep -qE "$DEFAULT_HTTP_PORT|$DEFAULT_HTTPS_PORT"; then
+            warn "Some iptables rules may still be present. Check: sudo iptables -t nat -L -n"
+        else
+            info "iptables rules removed"
+        fi
+    fi
+
+    # 2. Stop and disable fpsd service.
+    if systemctl --user is-enabled --quiet "$SERVICE_NAME" 2>/dev/null || [[ -f "$UNIT_DST" ]]; then
+        found_anything=true
+        step "Stopping and disabling $SERVICE_NAME"
+        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+        systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+        rm -f "$UNIT_DST"
+        systemctl --user daemon-reload
+        info "Service stopped and removed"
+    fi
+
+    # 3. Remove binary.
+    if [[ -f "$BINARY_DST" ]]; then
+        found_anything=true
+        step "Removing binary"
+        rm -f "$BINARY_DST"
+        info "Removed $BINARY_DST"
+    fi
+
+    if ! $found_anything; then
+        info "fpsd does not appear to be installed. Nothing to do."
+        return 0
+    fi
+
+    # 4. Config and data.
+    step "User data"
+    if $OPT_PURGE; then
+        if [[ -d "$CONFIG_DIR" ]]; then
+            rm -rf "$CONFIG_DIR"
+            info "Removed config: $CONFIG_DIR"
+        fi
+        if [[ -d "$DATA_DIR" ]]; then
+            rm -rf "$DATA_DIR"
+            info "Removed data: $DATA_DIR"
+        fi
+    else
+        if [[ -d "$CONFIG_DIR" ]]; then
+            if confirm "Remove config ($CONFIG_DIR)?"; then
+                rm -rf "$CONFIG_DIR"
+                info "Removed $CONFIG_DIR"
+            else
+                info "Kept $CONFIG_DIR"
+            fi
+        fi
+        if [[ -d "$DATA_DIR" ]]; then
+            local data_size
+            data_size=$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1 || echo "unknown")
+            if confirm "Remove data ($DATA_DIR, $data_size)?"; then
+                rm -rf "$DATA_DIR"
+                info "Removed $DATA_DIR"
+            else
+                info "Kept $DATA_DIR"
+            fi
+        fi
+    fi
+
+    step "Uninstall complete"
+}
+
+# ─── Status ─────────────────────────────────────────────────────────────
+
+do_status() {
+    step "Installation"
+
+    # Binary.
+    if [[ -f "$BINARY_DST" ]]; then
+        local ver
+        ver=$("$BINARY_DST" --version 2>/dev/null || echo "unknown")
+        info "Binary: $BINARY_DST ($ver)"
+    else
+        info "Binary: not installed"
+    fi
+
+    # Config.
+    if [[ -f "$CONFIG_DST" ]]; then
+        info "Config: $CONFIG_DST"
+    else
+        info "Config: not found"
+    fi
+
+    # Data.
+    if [[ -d "$DATA_DIR" ]]; then
+        local data_size
+        data_size=$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1 || echo "unknown")
+        info "Data:   $DATA_DIR ($data_size)"
+    else
+        info "Data:   not found"
+    fi
+
+    step "Service"
+
+    if [[ -f "$UNIT_DST" ]]; then
+        local state
+        state=$(systemctl --user show -p ActiveState --value "$SERVICE_NAME" 2>/dev/null || echo "unknown")
+        info "$SERVICE_NAME: $state"
+
+        if [[ "$state" == "active" ]]; then
+            local uptime_since
+            uptime_since=$(systemctl --user show -p ActiveEnterTimestamp --value "$SERVICE_NAME" 2>/dev/null || echo "unknown")
+            info "Since: $uptime_since"
+        fi
+
+        local linger
+        linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || echo "unknown")
+        info "Linger: $linger"
+    else
+        info "$SERVICE_NAME: not installed"
+    fi
+
+    step "Transparent proxy"
+
+    if [[ -f "$TPROXY_UNIT" ]]; then
+        local tproxy_state
+        tproxy_state=$(systemctl show -p ActiveState --value "$TPROXY_SERVICE" 2>/dev/null || echo "unknown")
+        info "$TPROXY_SERVICE: $tproxy_state"
+
+        # Check rules (may need sudo, best-effort without it).
+        if sudo -n iptables -t nat -L PREROUTING -n 2>/dev/null | grep -qE "$DEFAULT_HTTP_PORT|$DEFAULT_HTTPS_PORT"; then
+            info "iptables rules: applied"
+        else
+            info "iptables rules: not detected (may need sudo to check)"
+        fi
+
+        local fwd
+        fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "unknown")
+        info "IP forwarding: $fwd"
+
+        # Try to extract interfaces from unit file.
+        local ifaces
+        ifaces=$(grep -oP '(?<=-i )\S+' "$TPROXY_UNIT" 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//' || echo "unknown")
+        info "Interfaces: $ifaces"
+    else
+        info "$TPROXY_SERVICE: not installed"
+    fi
+
+    step "Connectivity"
+
+    local hb_port="$DEFAULT_LISTEN_PORT"
+    if [[ -f "$CONFIG_DST" ]]; then
+        local parsed
+        parsed=$(grep -oP '(?<=listen:\s")([^"]+)' "$CONFIG_DST" 2>/dev/null | grep -oP '\d+$' || true)
+        [[ -n "$parsed" ]] && hb_port="$parsed"
+    fi
+
+    if curl -sf "http://localhost:${hb_port}/fps/heartbeat" >/dev/null 2>&1; then
+        local hb_json
+        hb_json=$(curl -sf "http://localhost:${hb_port}/fps/heartbeat" 2>/dev/null)
+        local version mode uptime
+        version=$(echo "$hb_json" | grep -oP '"version":"[^"]*"' | head -1 || true)
+        mode=$(echo "$hb_json" | grep -oP '"mode":"[^"]*"' | head -1 || true)
+        uptime=$(echo "$hb_json" | grep -oP '"uptime_seconds":\d+' | head -1 || true)
+        info "Heartbeat: OK ($version, $mode, $uptime)"
+    else
+        info "Heartbeat: no response (service may not be running)"
+    fi
+}
+
+# ─── Main ───────────────────────────────────────────────────────────────
+
+parse_args "$@"
+
+case "$CMD" in
+    install)   do_install ;;
+    uninstall) do_uninstall ;;
+    status)    do_status ;;
+esac

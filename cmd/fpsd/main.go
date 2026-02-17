@@ -34,6 +34,7 @@ import (
 	"github.com/ushineko/face-puncher-supreme/internal/probe"
 	"github.com/ushineko/face-puncher-supreme/internal/proxy"
 	"github.com/ushineko/face-puncher-supreme/internal/stats"
+	"github.com/ushineko/face-puncher-supreme/internal/transparent"
 	"github.com/ushineko/face-puncher-supreme/internal/version"
 	"github.com/ushineko/face-puncher-supreme/web"
 )
@@ -324,6 +325,21 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		)
 	}
 
+	// Build transparent data callback.
+	var transparentDataFn func() *probe.TransparentData
+	if cfg.Transparent.Enabled {
+		transparentDataFn = func() *probe.TransparentData {
+			return &probe.TransparentData{
+				Enabled:   true,
+				HTTPAddr:  cfg.Transparent.HTTPAddr,
+				HTTPSAddr: cfg.Transparent.HTTPSAddr,
+			}
+		}
+		if mitmInterceptor == nil {
+			logger.Info("transparent mode enabled without MITM — HTTPS domains will be tunneled only")
+		}
+	}
+
 	// Create the proxy server with placeholder handlers (replaced after srv exists).
 	srv := proxy.New(&proxy.Config{
 		ListenAddr:        cfg.Listen,
@@ -342,14 +358,15 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 	})
 
 	// Now build real handlers with the actual ServerInfo (srv).
-	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn, pluginsDataFn)
+	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn, transparentDataFn, pluginsDataFn)
 	var statsHandler http.HandlerFunc
 	if cfg.Stats.Enabled {
 		statsProvider = &probe.StatsProvider{
-			Info:      srv,
-			BlockFn:   blockDataFn,
-			MITMFn:    mitmDataFn,
-			PluginsFn: pluginsDataFn,
+			Info:          srv,
+			BlockFn:       blockDataFn,
+			MITMFn:        mitmDataFn,
+			TransparentFn: transparentDataFn,
+			PluginsFn:     pluginsDataFn,
 			StatsDB:   statsDB,
 			Collector: collector,
 			Resolver:  probe.NewReverseDNS(5 * time.Minute),
@@ -369,7 +386,7 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 			DevMode:    flagDashboardDev,
 			LogBuffer:  logBuf,
 			HeartbeatJSON: func() ([]byte, error) {
-				resp := probe.BuildHeartbeat(srv, blockDataFn, mitmDataFn, pluginsDataFn)
+				resp := probe.BuildHeartbeat(srv, blockDataFn, mitmDataFn, transparentDataFn, pluginsDataFn)
 				return json.Marshal(resp)
 			},
 			StatsJSON: func() ([]byte, error) {
@@ -402,6 +419,42 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		statsDB.Start()
 	}
 
+	// Initialize transparent proxy listener if enabled.
+	var tpListener *transparent.Listener
+	if cfg.Transparent.Enabled {
+		tpListener = transparent.New(&transparent.Config{
+			HTTPAddr:        cfg.Transparent.HTTPAddr,
+			HTTPSAddr:       cfg.Transparent.HTTPSAddr,
+			Logger:          logger,
+			Verbose:         cfg.Verbose,
+			Blocker:         blocker,
+			MITMInterceptor: mitmInterceptor,
+			ConnectTimeout:  cfg.Timeouts.Connect.Duration,
+			OnRequest:       collector.RecordRequest,
+			OnTunnelClose:   collector.RecordBytes,
+			OnTransparentHTTP: func() {
+				collector.TransparentHTTP.Add(1)
+			},
+			OnTransparentTLS: func() {
+				collector.TransparentTLS.Add(1)
+			},
+			OnTransparentMITM: func() {
+				collector.TransparentMITM.Add(1)
+			},
+			OnTransparentBlock: func() {
+				collector.TransparentBlock.Add(1)
+			},
+			OnSNIMissing: func() {
+				collector.SNIMissing.Add(1)
+			},
+		})
+
+		logger.Info("transparent proxy enabled",
+			"http_addr", cfg.Transparent.HTTPAddr,
+			"https_addr", cfg.Transparent.HTTPSAddr,
+		)
+	}
+
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -417,6 +470,7 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 			"inline_blocklist", len(cfg.Blocklist),
 			"allowlist_entries", bl.AllowlistSize(),
 			"stats_enabled", cfg.Stats.Enabled,
+			"transparent_enabled", cfg.Transparent.Enabled,
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", "error", err)
@@ -424,8 +478,24 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		}
 	}()
 
+	// Start transparent listeners in a separate goroutine.
+	if tpListener != nil {
+		go func() {
+			if err := tpListener.ListenAndServe(); err != nil {
+				logger.Error("transparent listener error", "error", err)
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
+
+	// Stop transparent listeners first.
+	if tpListener != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Shutdown.Duration)
+		tpListener.Shutdown(shutdownCtx)
+		cancel()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Shutdown.Duration)
 	defer cancel()
