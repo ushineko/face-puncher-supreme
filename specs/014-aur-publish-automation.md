@@ -1,6 +1,6 @@
 # Spec 014: AUR Publish Automation
 
-**Status**: INCOMPLETE
+**Status**: COMPLETE
 **Priority**: Medium
 **Type**: CI/CD
 **Scope**: GitHub Actions workflow + secret management
@@ -83,7 +83,7 @@ This is optional — a single account with the deploy key works fine for a perso
 
 ### New Workflow Job
 
-Add a `publish-aur` job to `.github/workflows/build.yml` that runs after the `release` job, only on tag pushes.
+Add a `publish-aur` job to `.github/workflows/release.yml` that runs after the build job, only on tag pushes.
 
 ```yaml
 publish-aur:
@@ -181,24 +181,24 @@ The PKGBUILD committed to GitHub already has `pkgver` set by prior commits (we u
 
 These steps must be done by the repo owner before the workflow will work:
 
-1. [ ] Generate passwordless ed25519 SSH key pair: `ssh-keygen -t ed25519 -C "fpsd-git-aur-deploy" -f ~/.ssh/aur_deploy -N ""`
-2. [ ] Register public key at https://aur.archlinux.org → My Account → SSH Public Key
-3. [ ] Add private key as GitHub secret `AUR_SSH_KEY` at repo → Settings → Secrets → Actions
-4. [ ] Delete local private key: `rm ~/.ssh/aur_deploy`
-5. [ ] (Optional) Test by pushing a tag and watching the workflow run
+1. [x] Generate passwordless ed25519 SSH key pair: `ssh-keygen -t ed25519 -C "fpsd-git-aur-deploy" -f ~/.ssh/aur_deploy -N ""`
+2. [x] Register public key at https://aur.archlinux.org → My Account → SSH Public Key
+3. [x] Add private key as GitHub secret `AUR_SSH_KEY` at repo → Settings → Secrets → Actions
+4. [ ] Delete local private key: `rm ~/.ssh/aur_deploy` (kept locally for manual use)
+5. [x] (Optional) Test by pushing a tag and watching the workflow run
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] `publish-aur` job added to `.github/workflows/build.yml`
-- [ ] Job runs only on `v*` tag pushes, after the build succeeds
-- [ ] Job clones AUR repo, copies PKGBUILD + fpsd.install, generates .SRCINFO, commits, and pushes
-- [ ] Job is a no-op if PKGBUILD hasn't changed (no empty commits)
-- [ ] SSH key is loaded from `AUR_SSH_KEY` secret, never hardcoded
-- [ ] SSH key is configured with `StrictHostKeyChecking accept-new` (trust on first use for AUR host)
-- [ ] Setup steps documented for SSH key generation and secret creation
-- [ ] Existing local `.aur-repo/` workflow continues to work for manual pushes if needed
+- [x] `publish-aur` job added to `.github/workflows/release.yml`
+- [x] Job runs only on `v*` tag pushes, after the build succeeds
+- [x] Job clones AUR repo, copies PKGBUILD + fpsd.install, generates .SRCINFO, commits, and pushes
+- [x] Job is a no-op if PKGBUILD hasn't changed (no empty commits)
+- [x] SSH key is loaded from `AUR_SSH_KEY` secret, never hardcoded
+- [x] SSH key is configured with `StrictHostKeyChecking accept-new` (trust on first use for AUR host)
+- [x] Setup steps documented for SSH key generation and secret creation
+- [x] Existing local `.aur-repo/` workflow continues to work for manual pushes if needed
 
 ---
 

@@ -1,6 +1,6 @@
 # Spec 013: Dashboard UI Improvements
 
-**Status**: INCOMPLETE
+**Status**: COMPLETE
 **Priority**: Medium
 **Type**: Bugfix + Feature
 **Scope**: Frontend only (React/TypeScript in `web/ui/`)
@@ -37,11 +37,11 @@ The About page renders the project README via `react-markdown`. The table of con
 
 ### Acceptance Criteria
 
-- [ ] `h1`, `h2`, `h3` elements render with a slug-based `id` attribute derived from their text content
-- [ ] Clicking a `#hash` anchor link scrolls smoothly to the target heading within the About page
-- [ ] Anchor clicks do NOT open a new tab
-- [ ] External links (`http://`, `https://`) still open in a new tab with `rel="noopener noreferrer"`
-- [ ] Relative links without `#` prefix are unaffected (still open in new tab)
+- [x] `h1`, `h2`, `h3` elements render with a slug-based `id` attribute derived from their text content
+- [x] Clicking a `#hash` anchor link scrolls smoothly to the target heading within the About page
+- [x] Anchor clicks do NOT open a new tab
+- [x] External links (`http://`, `https://`) still open in a new tab with `rel="noopener noreferrer"`
+- [x] Relative links without `#` prefix are unaffected (still open in new tab)
 
 ---
 
@@ -78,13 +78,13 @@ interface DashboardLayout {
 
 ### Acceptance Criteria
 
-- [ ] Each dashboard section (stat cards and top-N tables) can be dragged and dropped to reorder within its grid group
-- [ ] A visible drag handle (grip icon) appears on each section header on hover
-- [ ] Drag feedback: visual indicator (opacity change or outline) on the dragged item and drop target
-- [ ] Reordered layout persists across page refreshes via `localStorage`
-- [ ] "Reset Layout" button in the dashboard header restores default section order
-- [ ] Conditional sections (MITM, Plugins, plugin rules) integrate correctly — appearing/disappearing based on data without breaking saved order
-- [ ] No external drag-and-drop library added (HTML5 DnD API only)
+- [x] Each dashboard section (stat cards and top-N tables) can be dragged and dropped to reorder within its grid group
+- [x] A visible drag handle (grip icon) appears on each section header on hover
+- [x] Drag feedback: visual indicator (opacity change or outline) on the dragged item and drop target
+- [x] Reordered layout persists across page refreshes via `localStorage`
+- [x] "Reset Layout" button in the dashboard header restores default section order
+- [x] Conditional sections (MITM, Plugins, plugin rules) integrate correctly — appearing/disappearing based on data without breaking saved order
+- [x] No external drag-and-drop library added (HTML5 DnD API only)
 
 ---
 
@@ -160,20 +160,20 @@ Both components should:
 
 ### Acceptance Criteria
 
-- [ ] Traffic line graph shows req/sec over a rolling ~3-minute window, updated in real time from WebSocket data
-- [ ] Top Blocked Domains pie chart shows top 8 domains + "Other" slice
-- [ ] Top Requested Domains pie chart shows top 8 domains + "Other" slice
-- [ ] Top Clients pie chart shows top 8 clients + "Other" slice
-- [ ] Charts use `<canvas>` 2D context rendering, no external charting library
-- [ ] Each chart has a toggle button in its section header to show/hide
-- [ ] Chart visibility persists in `localStorage`
-- [ ] Default state: all charts hidden
-- [ ] Charts handle HiDPI displays (devicePixelRatio canvas scaling)
-- [ ] Charts resize correctly when viewport changes
-- [ ] Chart colors are consistent with the VSCode dark theme
-- [ ] Line chart has labeled axes, subtle grid lines, and a gradient fill under the line
-- [ ] Pie charts have a legend with domain/client names and percentages
-- [ ] Empty data state handled gracefully (no blank canvas, show "No data" text)
+- [x] Traffic line graph shows req/sec over a rolling ~3-minute window, updated in real time from WebSocket data
+- [x] Top Blocked Domains pie chart shows top 8 domains + "Other" slice
+- [x] Top Requested Domains pie chart shows top 8 domains + "Other" slice
+- [x] Top Clients pie chart shows top 8 clients + "Other" slice
+- [x] Charts use `<canvas>` 2D context rendering, no external charting library
+- [x] Each chart has a toggle button in its section header to show/hide
+- [x] Chart visibility persists in `localStorage`
+- [x] Default state: all charts hidden
+- [x] Charts handle HiDPI displays (devicePixelRatio canvas scaling)
+- [x] Charts resize correctly when viewport changes
+- [x] Chart colors are consistent with the VSCode dark theme
+- [x] Line chart has labeled axes, subtle grid lines, and a gradient fill under the line
+- [x] Pie charts have a legend with domain/client names and percentages
+- [x] Empty data state handled gracefully (no blank canvas, show "No data" text)
 
 ---
 
