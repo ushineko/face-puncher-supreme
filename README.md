@@ -1,6 +1,16 @@
 # face-puncher-supreme
 
-Content-aware ad-blocking proxy. Targets apps where ads are served from the same domain as content, making DNS-based blocking ineffective.
+Content-aware HTTPS interception proxy for ad blocking. Operates at the HTTP layer to filter ads that DNS-based blockers cannot reach — specifically ads served from the same domain as content (e.g., Reddit promoted posts from `www.reddit.com`).
+
+**How it works**: fpsd sits between clients and the internet as an HTTP/HTTPS proxy. It combines three layers of filtering:
+
+1. **Domain blocking** — 376K+ domains from Pi-hole-compatible blocklists, checked on every request
+2. **MITM TLS interception** — decrypts HTTPS for configured domains to inspect response bodies
+3. **Content filter plugins** — site-specific rules that strip ad elements from HTML/JSON responses
+
+Runs as a single Go binary with an embedded React dashboard. Supports both explicit proxy configuration and transparent mode (iptables redirect, no client config needed). Deployed as a systemd user service or Arch Linux package.
+
+**Tested on**: Chromium, Safari (macOS), iOS/iPadOS (transparent mode), Windows (transparent mode).
 
 ## Table of Contents
 
@@ -510,6 +520,10 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.2.3 — 2026-02-17
+
+- docs: README intro rewritten to describe the three-layer filtering architecture, deployment modes, and tested platforms
 
 ### v1.2.2 — 2026-02-17
 
