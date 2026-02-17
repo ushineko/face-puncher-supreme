@@ -16,3 +16,9 @@ intercepts/
 # Frontend build artifacts
 web/ui/node_modules/
 web/ui/dist/
+
+# Arch packaging artifacts (makepkg)
+*.pkg.tar.zst
+pkg/
+src/
+.aur-repo/

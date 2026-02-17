@@ -1,0 +1,79 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-arch:
+    name: Build Arch Package
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Install Build Dependencies
+      run: |
+        pacman -Sy --noconfirm archlinux-keyring
+        pacman -Su --noconfirm
+        pacman -S --noconfirm base-devel git go npm nodejs
+
+        # Create non-root builder user (makepkg refuses to run as root)
+        useradd -m builder
+        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        path: src_repo
+        fetch-depth: 0
+
+    - name: Fix Permissions
+      run: |
+        chown -R builder:builder src_repo
+
+    - name: CI Gates (test + lint)
+      run: |
+        cd src_repo
+        su builder -c "git config --global --add safe.directory $(pwd)"
+        su builder -c "make test"
+        su builder -c "make lint"
+
+    - name: Build Package
+      run: |
+        cd src_repo
+        su builder -c "makepkg -s --noconfirm"
+
+    - name: Upload Arch Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: arch-package
+        path: src_repo/*.pkg.tar.zst
+
+  release:
+    name: Create Release
+    needs: [build-arch]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download Arch Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: arch-package
+        path: dist
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

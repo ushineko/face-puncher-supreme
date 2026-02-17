@@ -120,6 +120,12 @@ confirm() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+# Detect if fpsd is installed via a system package (e.g. pacman).
+# Returns 0 (true) if /usr/bin/fpsd exists and is package-managed.
+is_packaged() {
+    [[ -f /usr/bin/fpsd ]] && command -v pacman >/dev/null 2>&1 && pacman -Qo /usr/bin/fpsd >/dev/null 2>&1
+}
+
 # ─── Preflight ──────────────────────────────────────────────────────────
 
 preflight() {
@@ -164,6 +170,23 @@ preflight() {
 # ─── Install ────────────────────────────────────────────────────────────
 
 do_install() {
+    # If fpsd is package-managed, skip binary/service management — only do tproxy.
+    if is_packaged; then
+        step "Package-managed fpsd detected at /usr/bin/fpsd"
+        local pkg_name
+        pkg_name=$(pacman -Qo /usr/bin/fpsd 2>/dev/null | awk '{print $5, $6}' || echo "unknown")
+        info "Package: $pkg_name"
+        info "Skipping binary copy and service unit management"
+        info "Only transparent proxy setup is available for packaged installs"
+
+        setup_transparent
+
+        step "Done"
+        info "Transparent proxy rules applied"
+        info "Service management: systemctl --user {start|stop|restart|status} fpsd"
+        return 0
+    fi
+
     preflight
 
     local is_upgrade=false
@@ -533,6 +556,28 @@ TPUNIT
 # ─── Uninstall ──────────────────────────────────────────────────────────
 
 do_uninstall() {
+    # If fpsd is package-managed, only handle tproxy teardown.
+    if is_packaged; then
+        step "Package-managed fpsd detected"
+        info "Only removing transparent proxy rules (binary and service are managed by pacman)"
+
+        if [[ -f "$TPROXY_UNIT" ]]; then
+            step "Removing transparent proxy iptables rules"
+            info "Stopping $TPROXY_SERVICE (requires sudo)..."
+            sudo systemctl stop "$TPROXY_SERVICE" 2>/dev/null || true
+            sudo systemctl disable "$TPROXY_SERVICE" 2>/dev/null || true
+            sudo rm -f "$TPROXY_UNIT"
+            sudo systemctl daemon-reload
+            info "Transparent proxy service removed"
+        else
+            info "No transparent proxy service found"
+        fi
+
+        step "Uninstall complete"
+        info "To remove the package itself: sudo pacman -R fpsd-git"
+        return 0
+    fi
+
     step "Uninstalling fpsd"
 
     local found_anything=false
@@ -620,10 +665,15 @@ do_uninstall() {
 do_status() {
     step "Installation"
 
-    # Binary.
-    if [[ -f "$BINARY_DST" ]]; then
+    # Binary — check package-managed first, then local.
+    if is_packaged; then
+        local ver pkg_name
+        ver=$(/usr/bin/fpsd version 2>/dev/null || echo "unknown")
+        pkg_name=$(pacman -Qo /usr/bin/fpsd 2>/dev/null | awk '{print $5, $6}' || echo "unknown")
+        info "Binary: /usr/bin/fpsd ($ver) [package: $pkg_name]"
+    elif [[ -f "$BINARY_DST" ]]; then
         local ver
-        ver=$("$BINARY_DST" --version 2>/dev/null || echo "unknown")
+        ver=$("$BINARY_DST" version 2>/dev/null || echo "unknown")
         info "Binary: $BINARY_DST ($ver)"
     else
         info "Binary: not installed"
@@ -647,10 +697,18 @@ do_status() {
 
     step "Service"
 
+    # Check both fps-ctl-managed unit and package-managed unit.
+    local unit_source=""
     if [[ -f "$UNIT_DST" ]]; then
+        unit_source="fps-ctl ($UNIT_DST)"
+    elif [[ -f "/usr/lib/systemd/user/fpsd.service" ]]; then
+        unit_source="package (/usr/lib/systemd/user/fpsd.service)"
+    fi
+
+    if [[ -n "$unit_source" ]]; then
         local state
         state=$(systemctl --user show -p ActiveState --value "$SERVICE_NAME" 2>/dev/null || echo "unknown")
-        info "$SERVICE_NAME: $state"
+        info "$SERVICE_NAME: $state (managed by $unit_source)"
 
         if [[ "$state" == "active" ]]; then
             local uptime_since

@@ -17,6 +17,7 @@ Content-aware ad-blocking proxy. Targets apps where ads are served from the same
 - [Management Endpoints](#management-endpoints)
 - [Logging](#logging)
 - [Install / Uninstall](#install--uninstall)
+- [Arch Linux Package](#arch-linux-package)
 - [Test](#test)
 - [Lint](#lint)
 - [Project Structure](#project-structure)
@@ -421,6 +422,44 @@ sudo systemctl stop fpsd-tproxy      # Remove iptables rules temporarily
 sudo systemctl start fpsd-tproxy     # Re-apply iptables rules
 ```
 
+## Arch Linux Package
+
+An AUR package (`fpsd-git`) is available for Arch Linux and derivatives (CachyOS, EndeavourOS, etc.).
+
+```bash
+# Install from AUR (using an AUR helper)
+yay -S fpsd-git
+
+# Or build manually
+git clone https://aur.archlinux.org/fpsd-git.git
+cd fpsd-git
+makepkg -si
+
+# First-time setup after install
+mkdir -p ~/.config/fpsd ~/.local/share/fpsd/logs
+cp /usr/share/doc/fpsd-git/fpsd.yml.example ~/.config/fpsd/fpsd.yml
+# Edit ~/.config/fpsd/fpsd.yml — set data_dir to ~/.local/share/fpsd
+
+# Enable the service
+systemctl --user enable --now fpsd
+
+# Transparent proxy (still uses fps-ctl)
+sudo fps-ctl install --transparent --interface eth0
+```
+
+**Package layout**:
+
+| Path | Purpose |
+| ---- | ------- |
+| `/usr/bin/fpsd` | Binary |
+| `/usr/bin/fps-ctl` | Transparent proxy management |
+| `/usr/lib/systemd/user/fpsd.service` | Systemd user service |
+| `/usr/share/doc/fpsd-git/fpsd.yml.example` | Reference config |
+| `~/.config/fpsd/fpsd.yml` | User config (copy from example) |
+| `~/.local/share/fpsd/` | User data (databases, CA certs, logs) |
+
+`fps-ctl` detects the package-managed binary and skips binary/service management, only handling iptables rules for transparent proxying.
+
 ## Test
 
 ```bash
@@ -471,6 +510,21 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.2.0 — 2026-02-17
+
+- GitHub Actions CI: builds Arch Linux package on push/PR to main (spec 012)
+- `PKGBUILD` for `fpsd-git` AUR package (x86_64, pure Go binary, ~5 MB compressed)
+- `fpsd.install` pacman hooks: first-time setup instructions, service restart on upgrade, pre-remove stop/disable
+- `pkgver()` reads VERSION from Makefile + git metadata for Arch-compatible version strings
+- Systemd user service unit: `/usr/bin/fpsd` with hardening (NoNewPrivileges, ProtectSystem, PrivateTmp)
+- Release job: creates GitHub Release with `.pkg.tar.zst` attached on `v*` tag push
+- `scripts/update_aur.sh`: manual AUR publish script (clone, copy, generate .SRCINFO, confirm, push)
+- fps-ctl package awareness: detects pacman-managed binary at `/usr/bin/fpsd`, skips binary/service management
+- fps-ctl status shows package name and version when package-managed
+- Reference config shipped as `/usr/share/doc/fpsd-git/fpsd.yml.example` (not /etc, for credential safety)
+- Full dogfood lifecycle verified: fps-ctl uninstall, makepkg, pacman -U, heartbeat OK, pacman -R, fps-ctl restore
+- 128 tests passing, 0 lint issues
 
 ### v1.1.0 — 2026-02-17
 
