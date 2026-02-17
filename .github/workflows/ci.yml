@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+    - name: Install Build Dependencies
+      run: |
+        pacman -Sy --noconfirm archlinux-keyring
+        pacman -Su --noconfirm
+        pacman -S --noconfirm base-devel git go npm nodejs
+
+        # Create non-root builder user (makepkg refuses to run as root)
+        useradd -m builder
+        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        path: src_repo
+        fetch-depth: 0
+
+    - name: Fix Permissions
+      run: |
+        chown -R builder:builder src_repo
+
+    - name: CI Gates (test + lint)
+      run: |
+        cd src_repo
+        su builder -c "git config --global --add safe.directory $(pwd)"
+        su builder -c "make build-ui"
+        su builder -c "make test"
+        su builder -c "make lint"
+
+    - name: Build Package
+      run: |
+        cd src_repo
+        su builder -c "makepkg -s --noconfirm"

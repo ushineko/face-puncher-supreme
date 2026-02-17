@@ -521,6 +521,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.2 — 2026-02-17
+
+- ci: split workflows into ci.yml (branch/PR) and release.yml (tags) to fix GitHub Actions deduplication
+
 ### v1.3.1 — 2026-02-17
 
 - ci: automated AUR publishing on version tags (spec 014)
