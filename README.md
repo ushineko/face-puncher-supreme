@@ -511,6 +511,12 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.2.1 — 2026-02-17
+
+- fps-ctl: automatic migration from fps-ctl to package-managed service — cleans up stale unit file and binary that shadow the package install
+- fps-ctl status: warns when fps-ctl unit is shadowing a package-installed unit, with fix instructions
+- CI: build UI assets before running tests (fixes `go:embed` missing `web/ui/dist` in clean CI environment)
+
 ### v1.2.0 — 2026-02-17
 
 - GitHub Actions CI: builds Arch Linux package on push/PR to main (spec 012)

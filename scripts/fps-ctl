@@ -126,6 +126,36 @@ is_packaged() {
     [[ -f /usr/bin/fpsd ]] && command -v pacman >/dev/null 2>&1 && pacman -Qo /usr/bin/fpsd >/dev/null 2>&1
 }
 
+# Clean up stale fps-ctl artifacts when a package-managed binary is installed.
+# The fps-ctl unit at ~/.config/systemd/user/ shadows the package unit at
+# /usr/lib/systemd/user/, causing the old binary to run instead of the new one.
+cleanup_stale_fpsctl() {
+    local cleaned=false
+
+    # Stale fps-ctl unit file shadows the package-installed unit.
+    if [[ -f "$UNIT_DST" ]]; then
+        step "Migrating from fps-ctl to package-managed service"
+        info "Removing stale fps-ctl unit (shadows package unit)"
+        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+        systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+        rm -f "$UNIT_DST"
+        systemctl --user daemon-reload
+        info "Removed $UNIT_DST"
+        cleaned=true
+    fi
+
+    # Stale fps-ctl binary — package owns /usr/bin/fpsd, so ~/.local/bin/fpsd is leftover.
+    if [[ -f "$BINARY_DST" ]]; then
+        rm -f "$BINARY_DST"
+        info "Removed stale binary $BINARY_DST"
+        cleaned=true
+    fi
+
+    if $cleaned; then
+        info "fps-ctl artifacts cleaned up — package unit will be used"
+    fi
+}
+
 # ─── Preflight ──────────────────────────────────────────────────────────
 
 preflight() {
@@ -178,6 +208,9 @@ do_install() {
         info "Package: $pkg_name"
         info "Skipping binary copy and service unit management"
         info "Only transparent proxy setup is available for packaged installs"
+
+        # Clean up stale fps-ctl artifacts that shadow the package install.
+        cleanup_stale_fpsctl
 
         setup_transparent
 
@@ -701,6 +734,16 @@ do_status() {
     local unit_source=""
     if [[ -f "$UNIT_DST" ]]; then
         unit_source="fps-ctl ($UNIT_DST)"
+        # Warn if the fps-ctl unit is shadowing a package-installed unit.
+        if is_packaged && [[ -f "/usr/lib/systemd/user/fpsd.service" ]]; then
+            warn "fps-ctl unit is shadowing the package unit!"
+            warn "The service is running the old fps-ctl binary, not the package binary."
+            warn "Fix: fps-ctl install (will migrate automatically) or manually:"
+            warn "  systemctl --user stop fpsd"
+            warn "  rm $UNIT_DST"
+            warn "  systemctl --user daemon-reload"
+            warn "  systemctl --user enable --now fpsd"
+        fi
     elif [[ -f "/usr/lib/systemd/user/fpsd.service" ]]; then
         unit_source="package (/usr/lib/systemd/user/fpsd.service)"
     fi
