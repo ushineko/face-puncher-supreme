@@ -42,6 +42,7 @@ jobs:
       run: |
         cd src_repo
         su builder -c "git config --global --add safe.directory $(pwd)"
+        su builder -c "make build-ui"
         su builder -c "make test"
         su builder -c "make lint"
 
