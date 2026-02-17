@@ -107,11 +107,13 @@ func Marker(mode, pluginName, ruleName, contentType string) string {
 		return fmt.Sprintf("<!-- fps filtered: %s -->", label)
 	}
 
-	// Visible mode: styled HTML div.
+	// Visible mode: styled HTML div. white-space:nowrap and overflow:hidden
+	// prevent character-by-character wrapping in narrow containers (e.g., right-rail).
 	return fmt.Sprintf(
-		`<div style="background:#1a1a2e;color:#e0e0e0;padding:8px 12px;margin:4px 0;`+
-			`border-left:3px solid #e94560;font:12px/1.4 monospace;border-radius:3px">`+
-			`&#x1f6e1; fps filtered: %s</div>`,
+		`<div style="background:#1a1a2e;color:#e0e0e0;padding:4px 8px;margin:4px 0;`+
+			`border-left:3px solid #e94560;font:11px/1.4 monospace;border-radius:3px;`+
+			`white-space:nowrap;overflow:hidden;text-overflow:ellipsis">`+
+			`&#x1f6e1; fps: %s</div>`,
 		label,
 	)
 }

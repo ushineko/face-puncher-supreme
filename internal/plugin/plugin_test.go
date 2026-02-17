@@ -17,7 +17,7 @@ import (
 
 func TestMarkerVisibleHTML(t *testing.T) {
 	m := Marker(PlaceholderVisible, "reddit-promotions", "promoted-post-html", "text/html")
-	assert.Contains(t, m, "fps filtered: reddit-promotions/promoted-post-html")
+	assert.Contains(t, m, "fps: reddit-promotions/promoted-post-html")
 	assert.Contains(t, m, "<div")
 	assert.Contains(t, m, "&#x1f6e1;")
 }

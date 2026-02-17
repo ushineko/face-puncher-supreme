@@ -134,8 +134,18 @@ func (r *redditFilter) shouldProcess(path string) bool {
 		return true
 	}
 
+	// Subreddit community feed partials.
+	if strings.HasPrefix(path, "/svc/shreddit/community-more-posts/") {
+		return true
+	}
+
 	// Post detail pages: /r/<sub>/comments/<id>/...
 	if strings.HasPrefix(path, "/r/") && strings.Contains(path, "/comments/") {
+		return true
+	}
+
+	// Subreddit listing pages: /r/<sub>/
+	if strings.HasPrefix(path, "/r/") {
 		return true
 	}
 

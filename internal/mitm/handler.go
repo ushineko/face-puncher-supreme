@@ -197,6 +197,14 @@ func (i *Interceptor) proxyLoop(clientTLS, upstreamTLS *tls.Conn, domain, client
 		// Strip hop-by-hop headers from client request.
 		removeHopByHopHeaders(req.Header)
 
+		// When a ResponseModifier is active, request uncompressed responses
+		// from upstream so the modifier can inspect/modify the raw body.
+		// The browser won't notice because the proxy re-serializes the
+		// response with an accurate Content-Length.
+		if i.ResponseModifier != nil {
+			req.Header.Del("Accept-Encoding")
+		}
+
 		// Ensure Host header is set correctly.
 		if req.Host == "" {
 			req.Host = domain

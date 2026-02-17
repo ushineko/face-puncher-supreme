@@ -105,7 +105,7 @@ func TestFeedAdRemovalWithVisiblePlaceholder(t *testing.T) {
 	assert.Equal(t, 1, result.Removed)
 
 	// Placeholder inserted.
-	assert.Contains(t, string(out), "fps filtered: reddit-promotions/feed-ad")
+	assert.Contains(t, string(out), "fps: reddit-promotions/feed-ad")
 	assert.Contains(t, string(out), "&#x1f6e1;")
 
 	// Ad gone.
@@ -261,7 +261,10 @@ func TestURLScopingProcessesAdPaths(t *testing.T) {
 		"/svc/shreddit/comments/r/test/t3_abc",
 		"/svc/shreddit/more-comments/r/test/t3_abc",
 		"/svc/shreddit/pdp-right-rail/related/test/t3_abc",
+		"/svc/shreddit/community-more-posts/best/?after=abc&name=LivestreamFail",
 		"/r/interesting/comments/1r6aomv/little_chimpanzee/",
+		"/r/LivestreamFail/",
+		"/r/funny/",
 	}
 
 	for _, path := range adPaths {
@@ -342,12 +345,14 @@ func TestShouldProcess(t *testing.T) {
 		{"/svc/shreddit/comments/r/test/t3_abc", true},
 		{"/svc/shreddit/more-comments/r/test/t3_abc", true},
 		{"/svc/shreddit/pdp-right-rail/related/test/t3_abc", true},
+		{"/svc/shreddit/community-more-posts/best/?after=abc", true},
 		{"/r/funny/comments/abc123/some_title/", true},
+		{"/r/LivestreamFail/", true},
+		{"/r/funny/", true},
 		{"/svc/shreddit/events", false},
 		{"/svc/shreddit/graphql", false},
 		{"/svc/shreddit/styling-overrides/", false},
 		{"/svc/shreddit/update-recaptcha", false},
-		{"/r/funny/", false}, // subreddit page without /comments/
 		{"/user/Sephora/", false},
 		{"/fps/heartbeat", false},
 	}

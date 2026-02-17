@@ -1,8 +1,8 @@
 # Spec 008: Reddit Promotions Filter Plugin
 
-**Status**: IMPLEMENTING (iteration 1 — live verification pending)
+**Status**: COMPLETE
 **Depends on**: Spec 007 (content filter plugin architecture)
-**Iteration**: 1 (initial implementation)
+**Commit**: (see git log for spec 008 commits)
 
 ---
 
@@ -60,10 +60,13 @@ Before attempting element removal, check if the response body contains any ad ma
 
 Only apply filter rules to responses matching these URL path patterns:
 - `/` (homepage SSR)
+- `/r/*` (subreddit listing pages)
 - `/r/*/comments/*` (post detail SSR)
 - `/svc/shreddit/feeds/*` (feed partials)
 - `/svc/shreddit/comments/*` (comment partials)
+- `/svc/shreddit/more-comments/*` (more-comments partials)
 - `/svc/shreddit/pdp-right-rail/*` (sidebar partials)
+- `/svc/shreddit/community-more-posts/*` (subreddit scroll-load partials)
 
 All other URLs (events, GraphQL, styling, recaptcha, etc.) are passed through unmodified.
 
@@ -122,18 +125,18 @@ plugins:
 
 ## Acceptance Criteria
 
-- [ ] Feed ads (`<shreddit-ad-post>`) are removed from homepage and feed partial responses
-- [ ] Comment-tree ads (`<shreddit-comment-tree-ads>` container) are removed from comment responses
-- [ ] Standalone comment-page ads (`<shreddit-comments-page-ad>`) are removed
-- [ ] Right-rail promoted posts (`<ad-event-tracker>` wrappers) are removed
-- [ ] Quick-skip: responses without ad markers pass through with zero string replacement
-- [ ] URL scoping: only matching URL patterns are processed
-- [ ] FilterResult reports accurate match/modify/rule/count data
-- [ ] Placeholder markers inserted per configured mode
-- [ ] Unit tests for each rule using captured HTML samples
-- [ ] Plugin switches from intercept to filter mode in fpsd.yml
-- [ ] Proxy builds, 0 lint issues, all tests pass
-- [ ] Live verification: browsing Reddit through the proxy shows no promoted posts
+- [x] Feed ads (`<shreddit-ad-post>`) are removed from homepage and feed partial responses
+- [x] Comment-tree ads (`<shreddit-comment-tree-ads>` container) are removed from comment responses
+- [x] Standalone comment-page ads (`<shreddit-comments-page-ad>`) are removed
+- [x] Right-rail promoted posts (`<ad-event-tracker>` wrappers) are removed
+- [x] Quick-skip: responses without ad markers pass through with zero string replacement
+- [x] URL scoping: only matching URL patterns are processed
+- [x] FilterResult reports accurate match/modify/rule/count data
+- [x] Placeholder markers inserted per configured mode
+- [x] Unit tests for each rule using captured HTML samples
+- [x] Plugin switches from intercept to filter mode in fpsd.yml
+- [x] Proxy builds, 0 lint issues, all tests pass
+- [x] Live verification: browsing Reddit through the proxy shows no promoted posts
 
 ---
 
