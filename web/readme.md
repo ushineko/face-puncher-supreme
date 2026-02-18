@@ -521,6 +521,30 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.4 — 2026-02-17
+
+- feat: dashboard auto-detects server restart — revalidates session on WebSocket reconnect, redirects to login if session expired instead of showing a broken dashboard
+
+### v1.3.3 — 2026-02-17
+
+- fix: traffic line graph now updates in real time when chart visibility is restored from localStorage on first load (was stuck on "Collecting data...")
+- fix: plugin stats (inspected/matched/modified/top rules) now report correctly in the dashboard — `RecordPluginInspected` was never being called, leaving the stats snapshot empty
+
+### v1.3.2 — 2026-02-17
+
+- ci: split workflows into ci.yml (branch/PR) and release.yml (tags) to fix GitHub Actions deduplication
+
+### v1.3.1 — 2026-02-17
+
+- ci: automated AUR publishing on version tags (spec 014)
+
+### v1.3.0 — 2026-02-17
+
+- fix: anchor links in README (About page) now scroll to target headings instead of opening blank tabs
+- feat: draggable dashboard sections — reorder stat cards and top-N tables via drag-and-drop, layout persisted to localStorage
+- feat: inline charts — traffic req/sec line graph (rolling 3-minute window) and top-N pie charts for blocked domains, requested domains, and clients
+- charts toggle per-section with visibility persisted alongside layout; default hidden to preserve existing text-only view
+
 ### v1.2.3 — 2026-02-17
 
 - docs: README intro rewritten to describe the three-layer filtering architecture, deployment modes, and tested platforms

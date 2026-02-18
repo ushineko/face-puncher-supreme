@@ -521,6 +521,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.5 — 2026-02-17
+
+- fix: WebSocket reconnect auth check now works when server restarts — auth status is checked on connection failure (not just successful reconnect), and the 200/{authenticated:false} response is handled correctly instead of being discarded
+
 ### v1.3.4 — 2026-02-17
 
 - feat: dashboard auto-detects server restart — revalidates session on WebSocket reconnect, redirects to login if session expired instead of showing a broken dashboard

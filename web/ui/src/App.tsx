@@ -17,10 +17,19 @@ export default function App() {
   useEffect(() => {
     if (authenticated) {
       socket.setReconnectListener(() => {
-        // After a reconnect, verify the session is still valid.
-        // If the server restarted, in-memory sessions are gone and
-        // authStatus will 401 → fps:unauthorized → useAuth → login screen.
-        void api.authStatus().catch(() => {});
+        // After a reconnect (or failed reconnect attempt), verify the
+        // session is still valid.  If the server restarted, in-memory
+        // sessions are gone.  authStatus returns 200 {authenticated:false}
+        // (not 401), so we must check the response and dispatch the
+        // unauthorized event ourselves.
+        void api
+          .authStatus()
+          .then((res) => {
+            if (!res.authenticated) {
+              window.dispatchEvent(new CustomEvent("fps:unauthorized"));
+            }
+          })
+          .catch(() => {});
       });
       socket.connect();
     } else {

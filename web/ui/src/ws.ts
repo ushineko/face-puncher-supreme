@@ -93,6 +93,16 @@ class FPSSocket {
     ws.onclose = () => {
       this.ws = null;
       this.setConnected(false);
+      // If we previously had a working connection, check auth on each
+      // failed reconnection attempt.  When the server restarts, sessions
+      // are cleared and the WS upgrade itself gets rejected (401), so
+      // onopen never fires.  Calling authStatus here lets apiFetch
+      // detect the 401 and dispatch fps:unauthorized → login redirect.
+      // When the server is fully down, the fetch throws a network error
+      // which the caller's .catch() swallows harmlessly.
+      if (this.hasConnectedOnce && this.shouldConnect) {
+        this.onReconnectFn?.();
+      }
       if (this.shouldConnect) {
         setTimeout(() => this.doConnect(), this.reconnectDelay);
         this.reconnectDelay = Math.min(
