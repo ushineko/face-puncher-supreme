@@ -22,12 +22,13 @@ async function apiFetch<T>(
 export async function login(
   username: string,
   password: string,
-): Promise<void> {
-  await apiFetch("/auth/login", {
+): Promise<string> {
+  const res = await apiFetch<{ token: string }>("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
+  return res.token;
 }
 
 export async function logout(): Promise<void> {

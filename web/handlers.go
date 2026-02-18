@@ -32,7 +32,8 @@ func (s *DashboardServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	setSessionCookie(w, token)
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck // best-effort response
+	resp, _ := json.Marshal(map[string]string{"status": "ok", "token": token}) //nolint:errcheck // static map always marshals
+	_, _ = w.Write(resp)                                                        //nolint:errcheck // best-effort response
 }
 
 // handleLogout invalidates the current session.

@@ -96,11 +96,18 @@ func clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// getSessionToken extracts the session token from the request cookie.
+// getSessionToken extracts the session token from the request. It checks
+// the "token" query parameter first, then falls back to the session cookie.
+// The query param is needed for WebSocket connections through HTTP proxies
+// where the browser may send a stale cookie from a previous session instead
+// of the cookie set on the current direct HTTP connection.
 func getSessionToken(r *http.Request) string {
-	c, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return ""
+	if t := r.URL.Query().Get("token"); t != "" {
+		return t
 	}
-	return c.Value
+	c, err := r.Cookie(sessionCookieName)
+	if err == nil {
+		return c.Value
+	}
+	return ""
 }

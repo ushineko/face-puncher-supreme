@@ -11,17 +11,13 @@ import Config from "./pages/Config";
 import Logs from "./pages/Logs";
 
 export default function App() {
-  const { authenticated, login, logout } = useAuth();
+  const { authenticated, token, login, logout } = useAuth();
 
   // Connect WebSocket when authenticated.
   useEffect(() => {
     if (authenticated) {
+      socket.setTokenFn(() => token.current);
       socket.setReconnectListener(() => {
-        // After a reconnect (or failed reconnect attempt), verify the
-        // session is still valid.  If the server restarted, in-memory
-        // sessions are gone.  authStatus returns 200 {authenticated:false}
-        // (not 401), so we must check the response and dispatch the
-        // unauthorized event ourselves.
         void api
           .authStatus()
           .then((res) => {
@@ -37,9 +33,10 @@ export default function App() {
     }
     return () => {
       socket.setReconnectListener(null);
+      socket.setTokenFn(null);
       socket.disconnect();
     };
-  }, [authenticated]);
+  }, [authenticated, token]);
 
   if (authenticated === null) {
     return (
