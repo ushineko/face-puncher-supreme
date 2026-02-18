@@ -12,10 +12,16 @@ class FPSSocket {
   private maxDelay = 30000;
   private shouldConnect = false;
   private _connected = false;
+  private hasConnectedOnce = false;
   private onStatusChange: ((connected: boolean) => void) | null = null;
+  private onReconnectFn: (() => void) | null = null;
 
   setStatusListener(fn: (connected: boolean) => void) {
     this.onStatusChange = fn;
+  }
+
+  setReconnectListener(fn: (() => void) | null) {
+    this.onReconnectFn = fn;
   }
 
   get connected() {
@@ -29,6 +35,7 @@ class FPSSocket {
 
   disconnect() {
     this.shouldConnect = false;
+    this.hasConnectedOnce = false;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -63,7 +70,12 @@ class FPSSocket {
 
     ws.onopen = () => {
       this.reconnectDelay = 1000;
+      const isReconnect = this.hasConnectedOnce;
+      this.hasConnectedOnce = true;
       this.setConnected(true);
+      if (isReconnect) {
+        this.onReconnectFn?.();
+      }
     };
 
     ws.onmessage = (ev) => {

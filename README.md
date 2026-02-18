@@ -521,6 +521,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.4 — 2026-02-17
+
+- feat: dashboard auto-detects server restart — revalidates session on WebSocket reconnect, redirects to login if session expired instead of showing a broken dashboard
+
 ### v1.3.3 — 2026-02-17
 
 - fix: traffic line graph now updates in real time when chart visibility is restored from localStorage on first load (was stuck on "Collecting data...")
