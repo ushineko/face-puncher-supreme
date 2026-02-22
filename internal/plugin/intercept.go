@@ -47,7 +47,7 @@ func (f *InterceptionFilter) Domains() []string  { return f.domains }
 
 // Init sets up the interception output directory. The data_dir is read from
 // Options["data_dir"] (set by main during plugin init).
-func (f *InterceptionFilter) Init(cfg PluginConfig, logger *slog.Logger) error {
+func (f *InterceptionFilter) Init(cfg *PluginConfig, logger *slog.Logger) error {
 	f.logger = logger
 
 	dataDir := "."

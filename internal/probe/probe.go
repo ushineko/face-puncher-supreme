@@ -7,6 +7,7 @@ package probe
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"time"
@@ -79,6 +80,7 @@ type HeartbeatResponse struct {
 	TransparentHTTPS   string   `json:"transparent_https,omitempty"`
 	PluginsActive      int      `json:"plugins_active"`
 	Plugins            []string `json:"plugins"`
+	SystemdManaged     bool     `json:"systemd_managed"`
 	UptimeSeconds      int64    `json:"uptime_seconds"`
 	OS                 string   `json:"os"`
 	Arch               string   `json:"arch"`
@@ -244,6 +246,7 @@ func BuildHeartbeat(
 		TransparentHTTPS:   transparentHTTPS,
 		PluginsActive:      pluginsActive,
 		Plugins:            pluginList,
+		SystemdManaged:     os.Getenv("INVOCATION_ID") != "",
 		UptimeSeconds:      int64(info.Uptime().Seconds()),
 		OS:                 runtime.GOOS,
 		Arch:               runtime.GOARCH,

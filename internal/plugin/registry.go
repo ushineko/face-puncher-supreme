@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/ushineko/face-puncher-supreme/internal/mitm"
@@ -13,15 +14,18 @@ import (
 // Adding a new plugin means adding its constructor here and rebuilding.
 var Registry = map[string]func() ContentFilter{}
 
+// DefaultPriority is the default priority for plugins that don't specify one.
+const DefaultPriority = 100
+
 // PluginStats tracks per-plugin filter statistics reported by the response modifier.
 type PluginStats struct {
-	Name      string
-	Version   string
-	Mode      string
-	Domains   []string
-	Inspected int64
-	Matched   int64
-	Modified  int64
+	Name       string
+	Version    string
+	Mode       string
+	Domains    []string
+	Inspected  int64
+	Matched    int64
+	Modified   int64
 	RuleCounts map[string]int64
 }
 
@@ -52,8 +56,9 @@ func InitPlugins(
 		mitmSet[strings.ToLower(d)] = struct{}{}
 	}
 
-	// Track domain claims across plugins.
-	domainOwner := make(map[string]string)
+	// Track domain+priority to detect conflicts.
+	// Key: "domain:priority", value: plugin name.
+	domainPriority := make(map[string]string)
 	var results []InitResult
 
 	for name, cfg := range configs {
@@ -88,6 +93,11 @@ func InitPlugins(
 				name, PlaceholderVisible, PlaceholderComment, PlaceholderNone, cfg.Placeholder)
 		}
 
+		// Default priority.
+		if cfg.Priority == 0 {
+			cfg.Priority = DefaultPriority
+		}
+
 		// Create plugin instance.
 		p := constructor()
 
@@ -97,23 +107,24 @@ func InitPlugins(
 			domains = p.Domains()
 		}
 
-		// Validate domains are in MITM list.
+		// Validate domains are in MITM list and no duplicate priorities per domain.
 		for _, d := range domains {
 			dl := strings.ToLower(d)
 			if _, ok := mitmSet[dl]; !ok {
 				return nil, fmt.Errorf("plugin %q: domain %q is not in mitm.domains (plugin cannot fire for non-intercepted domains)", name, d)
 			}
-			if owner, claimed := domainOwner[dl]; claimed {
-				return nil, fmt.Errorf("plugin %q: domain %q is already claimed by plugin %q", name, d, owner)
+			key := fmt.Sprintf("%s:%d", dl, cfg.Priority)
+			if owner, exists := domainPriority[key]; exists {
+				return nil, fmt.Errorf("plugin %q: priority %d on domain %q conflicts with plugin %q", name, cfg.Priority, d, owner)
 			}
-			domainOwner[dl] = name
+			domainPriority[key] = name
 		}
 
 		// Override config domains with the resolved list.
 		cfg.Domains = domains
 
 		// Initialize the plugin.
-		if err := p.Init(cfg, logger.With("plugin", name)); err != nil {
+		if err := p.Init(&cfg, logger.With("plugin", name)); err != nil {
 			return nil, fmt.Errorf("plugin %q: init failed: %w", name, err)
 		}
 
@@ -122,6 +133,7 @@ func InitPlugins(
 			"version", p.Version(),
 			"mode", cfg.Mode,
 			"placeholder", cfg.Placeholder,
+			"priority", cfg.Priority,
 			"domains", domains,
 		)
 
@@ -131,10 +143,10 @@ func InitPlugins(
 	return results, nil
 }
 
-// BuildResponseModifier creates a ResponseModifier that dispatches to the
-// correct plugin based on domain. Only plugins in "filter" mode are wired
-// into the modifier; "intercept" mode plugins handle their own capture in
-// their Filter() method.
+// BuildResponseModifier creates a ResponseModifier that dispatches to
+// plugins based on domain. Multiple plugins can handle the same domain,
+// executing in priority order (lower number first). Each plugin receives
+// the output of the previous one.
 func BuildResponseModifier(
 	results []InitResult,
 	onInspect OnPluginInspect,
@@ -146,15 +158,26 @@ func BuildResponseModifier(
 	}
 
 	type entry struct {
-		plugin ContentFilter
-		cfg    PluginConfig
+		plugin   ContentFilter
+		cfg      PluginConfig
+		priority int
 	}
 
-	lookup := map[string]entry{}
+	// Build domain → sorted list of entries.
+	lookup := map[string][]entry{}
 	for _, r := range results {
+		e := entry{plugin: r.Plugin, cfg: r.Config, priority: r.Config.Priority}
 		for _, d := range r.Config.Domains {
-			lookup[strings.ToLower(d)] = entry{plugin: r.Plugin, cfg: r.Config}
+			dl := strings.ToLower(d)
+			lookup[dl] = append(lookup[dl], e)
 		}
+	}
+
+	// Sort each domain's entries by priority (ascending = lower runs first).
+	for d := range lookup {
+		sort.Slice(lookup[d], func(i, j int) bool {
+			return lookup[d][i].priority < lookup[d][j].priority
+		})
 	}
 
 	if len(lookup) == 0 {
@@ -162,48 +185,62 @@ func BuildResponseModifier(
 	}
 
 	return func(domain string, req *http.Request, resp *http.Response, body []byte) ([]byte, error) {
-		e, ok := lookup[strings.ToLower(domain)]
+		entries, ok := lookup[strings.ToLower(domain)]
 		if !ok {
 			return body, nil
 		}
 
-		if onInspect != nil {
-			onInspect(e.plugin.Name())
-		}
-
-		modified, result, err := e.plugin.Filter(req, resp, body)
-		if err != nil {
-			return nil, fmt.Errorf("plugin %s: %w", e.plugin.Name(), err)
-		}
-
-		if result.Matched && onMatch != nil {
-			onMatch(e.plugin.Name(), result.Rule, result.Modified, result.Removed)
-		}
-
-		logMatches := false
-		if v, ok := e.cfg.Options["log_matches"]; ok {
-			if b, ok := v.(bool); ok {
-				logMatches = b
+		current := body
+		for _, e := range entries {
+			if onInspect != nil {
+				onInspect(e.plugin.Name())
 			}
-		}
 
-		if result.Matched {
-			lvl := slog.LevelDebug
-			if logMatches {
-				lvl = slog.LevelInfo
+			modified, result, err := e.plugin.Filter(req, resp, current)
+			if err != nil {
+				return nil, fmt.Errorf("plugin %s: %w", e.plugin.Name(), err)
 			}
-			logger.Log(nil, lvl, "plugin filter match", //nolint:staticcheck // nil context is fine for slog
-				"name", e.plugin.Name(),
-				"rule", result.Rule,
-				"url", req.URL.String(),
-				"method", req.Method,
-				"status", resp.StatusCode,
-				"body_delta", len(modified)-len(body),
-				"placeholder", e.cfg.Placeholder,
-				"removed", result.Removed,
-			)
+
+			// Report matches via callback.
+			if result.Matched && onMatch != nil {
+				if len(result.Rules) > 0 {
+					// Multi-rule plugin: report each rule individually.
+					for _, rm := range result.Rules {
+						onMatch(e.plugin.Name(), rm.Rule, rm.Modified, rm.Count)
+					}
+				} else {
+					// Single-rule plugin: report aggregate.
+					onMatch(e.plugin.Name(), result.Rule, result.Modified, result.Removed)
+				}
+			}
+
+			logMatches := false
+			if v, ok := e.cfg.Options["log_matches"]; ok {
+				if b, ok := v.(bool); ok {
+					logMatches = b
+				}
+			}
+
+			if result.Matched {
+				lvl := slog.LevelDebug
+				if logMatches {
+					lvl = slog.LevelInfo
+				}
+				logger.Log(nil, lvl, "plugin filter match", //nolint:staticcheck // nil context is fine for slog
+					"name", e.plugin.Name(),
+					"rule", result.Rule,
+					"url", req.URL.String(),
+					"method", req.Method,
+					"status", resp.StatusCode,
+					"body_delta", len(modified)-len(current),
+					"placeholder", e.cfg.Placeholder,
+					"removed", result.Removed,
+				)
+			}
+
+			current = modified
 		}
 
-		return modified, nil
+		return current, nil
 	}
 }

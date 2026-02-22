@@ -1,12 +1,14 @@
 package plugin
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,8 +100,8 @@ type mockFilter struct {
 func (m *mockFilter) Name() string      { return m.name }
 func (m *mockFilter) Version() string    { return m.version }
 func (m *mockFilter) Domains() []string  { return m.domains }
-func (m *mockFilter) Init(cfg PluginConfig, _ *slog.Logger) error {
-	m.initCfg = cfg
+func (m *mockFilter) Init(cfg *PluginConfig, _ *slog.Logger) error {
+	m.initCfg = *cfg
 	return m.initErr
 }
 func (m *mockFilter) Filter(req *http.Request, resp *http.Response, body []byte) ([]byte, FilterResult, error) {
@@ -207,7 +209,7 @@ func TestInitPluginsDomainNotInMITM(t *testing.T) {
 	assert.Contains(t, err.Error(), "not in mitm.domains")
 }
 
-func TestInitPluginsDuplicateDomain(t *testing.T) {
+func TestInitPluginsDuplicatePriority(t *testing.T) {
 	Registry["dup-a"] = func() ContentFilter {
 		return &mockFilter{name: "dup-a", domains: []string{"shared.com"}}
 	}
@@ -218,14 +220,37 @@ func TestInitPluginsDuplicateDomain(t *testing.T) {
 	defer delete(Registry, "dup-b")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Same priority on same domain: error.
 	configs := map[string]PluginConfig{
-		"dup-a": {Enabled: true},
-		"dup-b": {Enabled: true},
+		"dup-a": {Enabled: true, Priority: 100},
+		"dup-b": {Enabled: true, Priority: 100},
 	}
 
 	_, err := InitPlugins(configs, []string{"shared.com"}, logger)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already claimed")
+	assert.Contains(t, err.Error(), "priority 100 on domain")
+}
+
+func TestInitPluginsSharedDomainDifferentPriority(t *testing.T) {
+	Registry["chain-a"] = func() ContentFilter {
+		return &mockFilter{name: "chain-a", domains: []string{"shared.com"}}
+	}
+	Registry["chain-b"] = func() ContentFilter {
+		return &mockFilter{name: "chain-b", domains: []string{"shared.com"}}
+	}
+	defer delete(Registry, "chain-a")
+	defer delete(Registry, "chain-b")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	configs := map[string]PluginConfig{
+		"chain-a": {Enabled: true, Priority: 100},
+		"chain-b": {Enabled: true, Priority: 200},
+	}
+
+	results, err := InitPlugins(configs, []string{"shared.com"}, logger)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
 }
 
 func TestInitPluginsConfigDomainOverride(t *testing.T) {
@@ -341,6 +366,107 @@ func TestBuildResponseModifierNoMatchPassthrough(t *testing.T) {
 	assert.False(t, inspectCalled, "onInspect should not be called for unknown domains")
 }
 
+// --- Plugin chaining tests ---
+
+func TestBuildResponseModifierChaining(t *testing.T) {
+	// Plugin A (priority 100): uppercases "hello" to "HELLO"
+	mockA := &mockFilter{
+		name:    "plugin-a",
+		version: "1.0",
+		domains: []string{"chain.com"},
+		filterFn: func(_ *http.Request, _ *http.Response, body []byte) ([]byte, FilterResult, error) {
+			out := strings.ReplaceAll(string(body), "hello", "HELLO")
+			modified := out != string(body)
+			return []byte(out), FilterResult{Matched: modified, Modified: modified, Rule: "upper", Removed: 1}, nil
+		},
+	}
+
+	// Plugin B (priority 200): appends " world"
+	mockB := &mockFilter{
+		name:    "plugin-b",
+		version: "1.0",
+		domains: []string{"chain.com"},
+		filterFn: func(_ *http.Request, _ *http.Response, body []byte) ([]byte, FilterResult, error) {
+			out := string(body) + " world"
+			return []byte(out), FilterResult{Matched: true, Modified: true, Rule: "append", Removed: 1}, nil
+		},
+	}
+
+	results := []InitResult{
+		{Plugin: mockA, Config: PluginConfig{
+			Enabled: true, Mode: ModeFilter, Domains: []string{"chain.com"},
+			Options: map[string]any{}, Priority: 100,
+		}},
+		{Plugin: mockB, Config: PluginConfig{
+			Enabled: true, Mode: ModeFilter, Domains: []string{"chain.com"},
+			Options: map[string]any{}, Priority: 200,
+		}},
+	}
+
+	var inspected []string
+	onInspect := func(name string) { inspected = append(inspected, name) }
+
+	var matched []string
+	onMatch := func(name, rule string, _ bool, _ int) { matched = append(matched, name+":"+rule) }
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mod := BuildResponseModifier(results, onInspect, onMatch, logger)
+	require.NotNil(t, mod)
+
+	req := &http.Request{URL: &url.URL{Path: "/test"}, Method: "GET"}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}}
+
+	body, err := mod("chain.com", req, resp, []byte("hello"))
+	require.NoError(t, err)
+	// A runs first (hello→HELLO), then B appends " world"
+	assert.Equal(t, "HELLO world", string(body))
+	assert.Equal(t, []string{"plugin-a", "plugin-b"}, inspected)
+	assert.Equal(t, []string{"plugin-a:upper", "plugin-b:append"}, matched)
+}
+
+func TestBuildResponseModifierMultiRuleReport(t *testing.T) {
+	mock := &mockFilter{
+		name:    "multi",
+		version: "1.0",
+		domains: []string{"multi.com"},
+		filterFn: func(_ *http.Request, _ *http.Response, body []byte) ([]byte, FilterResult, error) {
+			return []byte("done"), FilterResult{
+				Matched:  true,
+				Modified: true,
+				Rule:     "rule-a",
+				Removed:  5,
+				Rules: []RuleMatch{
+					{Rule: "rule-a", Count: 3, Modified: true},
+					{Rule: "rule-b", Count: 2, Modified: true},
+				},
+			}, nil
+		},
+	}
+
+	results := []InitResult{{
+		Plugin: mock,
+		Config: PluginConfig{
+			Enabled: true, Mode: ModeFilter, Domains: []string{"multi.com"},
+			Options: map[string]any{}, Priority: 100,
+		},
+	}}
+
+	var matches []string
+	onMatch := func(name, rule string, _ bool, count int) {
+		matches = append(matches, fmt.Sprintf("%s:%s:%d", name, rule, count))
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mod := BuildResponseModifier(results, nil, onMatch, logger)
+
+	req := &http.Request{URL: &url.URL{Path: "/test"}, Method: "GET"}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}}
+
+	_, err := mod("multi.com", req, resp, []byte("input"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"multi:rule-a:3", "multi:rule-b:2"}, matches)
+}
+
 // --- Interception filter tests ---
 
 func TestInterceptionFilterCapture(t *testing.T) {
@@ -348,7 +474,7 @@ func TestInterceptionFilterCapture(t *testing.T) {
 
 	f := NewInterceptionFilter("test-intercept", "0.1.0", []string{"example.com"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	err := f.Init(PluginConfig{
+	err := f.Init(&PluginConfig{
 		Enabled: true,
 		Mode:    ModeIntercept,
 		Options: map[string]any{"data_dir": tmpDir},
@@ -391,7 +517,7 @@ func TestInterceptionFilterSequencing(t *testing.T) {
 
 	f := NewInterceptionFilter("test-seq", "0.1.0", []string{"example.com"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	err := f.Init(PluginConfig{
+	err := f.Init(&PluginConfig{
 		Enabled: true,
 		Mode:    ModeIntercept,
 		Options: map[string]any{"data_dir": tmpDir},
@@ -428,7 +554,7 @@ func TestInterceptionFilterOutputDirPermissions(t *testing.T) {
 
 	f := NewInterceptionFilter("perm-test", "0.1.0", []string{"example.com"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	err := f.Init(PluginConfig{
+	err := f.Init(&PluginConfig{
 		Enabled: true,
 		Mode:    ModeIntercept,
 		Options: map[string]any{"data_dir": tmpDir},

@@ -45,6 +45,7 @@ type PluginConf struct {
 	Placeholder string         `yaml:"placeholder"`
 	Domains     []string       `yaml:"domains"`
 	Options     map[string]any `yaml:"options"`
+	Priority    int            `yaml:"priority"` // lower = runs first; 0 means default (100)
 }
 
 // MITM holds per-domain TLS interception configuration.
@@ -349,6 +350,9 @@ func validatePlugins(plugins map[string]PluginConf) []string {
 		}
 		if !validPlaceholders[p.Placeholder] {
 			errs = append(errs, fmt.Sprintf("plugins.%s.placeholder: must be \"visible\", \"comment\", or \"none\", got %q", name, p.Placeholder))
+		}
+		if p.Priority < 0 || p.Priority > 999 {
+			errs = append(errs, fmt.Sprintf("plugins.%s.priority: must be 0-999, got %d", name, p.Priority))
 		}
 		for i, d := range p.Domains {
 			if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {

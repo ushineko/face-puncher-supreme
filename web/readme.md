@@ -654,6 +654,13 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.5.0 — 2026-02-22
+
+- feat: content rewrite plugin — user-defined find/replace rules (literal + regex) applied to MITM'd responses, managed via REST API and dashboard UI
+- feat: plugin chaining — multiple content filters per domain with priority-based execution order
+- feat: rewrite rules dashboard tab — CRUD management, enable/disable toggle, live pattern tester, domain and URL pattern scoping
+- feat: proxy restart from dashboard — Config tab restart button (visible when running under systemd)
+
 ### v1.4.1 — 2026-02-22
 
 - docs: add network architecture diagrams to README — simple (application proxy) and advanced (transparent gateway with dhcpd + Pi-hole) deployment examples with mermaid diagrams

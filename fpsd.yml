@@ -74,11 +74,22 @@ plugins:
     enabled: true
     mode: "filter"           # "intercept" captures traffic; "filter" applies rules
     placeholder: "visible"   # "visible", "comment", or "none"
+    priority: 100            # lower = runs first (default 100)
     domains:
       - www.reddit.com
       - gql-fed.reddit.com
     options:
       log_matches: true
+
+  rewrite:
+    enabled: true
+    mode: "filter"
+    placeholder: "none"      # rewrite does its own replacement, no placeholder needed
+    priority: 900            # runs after site-specific plugins
+    domains:                 # applies to all mitm.domains
+      - www.reddit.com
+      - old.reddit.com
+      - gql-fed.reddit.com
 
 # Dashboard — web-based monitoring UI at /fps/dashboard.
 # Both username and password must be set to enable the dashboard.

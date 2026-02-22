@@ -37,7 +37,7 @@ type ContentFilter interface {
 
 	// Init is called once at startup with the plugin's config and a logger.
 	// Returns an error if the plugin cannot start (missing config, etc.).
-	Init(cfg PluginConfig, logger *slog.Logger) error
+	Init(cfg *PluginConfig, logger *slog.Logger) error
 
 	// Filter inspects an HTTP response and returns the (possibly modified) body.
 	// Called only for text-based Content-Types from matching domains.
@@ -56,10 +56,18 @@ type ContentFilter interface {
 
 // FilterResult reports what the plugin did with a response.
 type FilterResult struct {
-	Matched  bool   // true if the response contained filterable content
-	Modified bool   // true if the body was actually changed
-	Rule     string // which rule matched (for stats/logging), empty if no match
-	Removed  int    // number of content elements removed in this response
+	Matched  bool        // true if the response contained filterable content
+	Modified bool        // true if the body was actually changed
+	Rule     string      // which rule matched (for stats/logging), empty if no match
+	Removed  int         // number of content elements removed in this response
+	Rules    []RuleMatch // all matching rules (nil for single-rule plugins)
+}
+
+// RuleMatch holds per-rule match info for multi-rule plugins.
+type RuleMatch struct {
+	Rule     string
+	Count    int
+	Modified bool
 }
 
 // PluginConfig holds per-plugin configuration from fpsd.yml.
@@ -69,6 +77,7 @@ type PluginConfig struct {
 	Placeholder string         // placeholder mode: "visible", "comment", "none"
 	Domains     []string       // domains this plugin handles (overrides built-in)
 	Options     map[string]any // plugin-specific key-value pairs
+	Priority    int            // lower = runs first; default 100
 }
 
 // Placeholder mode constants.

@@ -219,10 +219,11 @@ func runProxy(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	pluginsDataFn, err := initPlugins(&cfg, mr.interceptor, collector, logger)
+	pluginsRes, err := initPlugins(&cfg, mr.interceptor, collector, logger)
 	if err != nil {
 		return err
 	}
+	pluginsDataFn := pluginsRes.dataFn
 
 	statsDB, err := initStatsDB(&cfg, collector, blRes.bl, logger)
 	if err != nil {
@@ -256,7 +257,7 @@ func runProxy(cmd *cobra.Command, _ []string) error {
 
 	defer initDashboard(&cfg, srv, statsProvider,
 		blRes.blockDataFn, mr.dataFn, transparentDataFn, pluginsDataFn,
-		blRes.bl, logBuf, logResult.LevelVar, logger)()
+		blRes.bl, logBuf, logResult.LevelVar, pluginsRes, logger)()
 
 	if statsDB != nil {
 		statsDB.Start()
@@ -496,6 +497,7 @@ func initDashboard(
 	bl *blocklist.DB,
 	logBuf *logbuf.Buffer,
 	levelVar *slog.LevelVar,
+	pluginsRes *pluginsResult,
 	logger *slog.Logger,
 ) func() {
 	if cfg.Dashboard.Username == "" || cfg.Dashboard.Password == "" {
@@ -524,8 +526,10 @@ func initDashboard(
 			redacted := cfg.Redacted()
 			return json.Marshal(redacted)
 		},
-		ReloadFn: makeReloadFn(cfg, bl, logBuf, levelVar, logger),
-		Logger:   logger,
+		ReloadFn:        makeReloadFn(cfg, bl, logBuf, levelVar, logger),
+		RewriteStore:    pluginsRes.rewriteStore,
+		RewriteReloadFn: pluginsRes.rewriteReload,
+		Logger:          logger,
 	})
 	dashboard.Start()
 	srv.SetDashboardHandler(dashboard)
@@ -774,17 +778,24 @@ func runGenerateCA(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// pluginsResult holds initialized plugin resources.
+type pluginsResult struct {
+	dataFn       func() *probe.PluginsData
+	rewriteStore *plugin.RewriteStore
+	rewriteReload func() error
+}
+
 // initPlugins initializes content filter plugins and wires them into the MITM
-// interceptor. Returns a PluginsData callback for heartbeat/stats, or nil if
-// no plugins are active.
+// interceptor. Returns a pluginsResult with PluginsData callback and rewrite
+// store references, or empty result if no plugins are active.
 func initPlugins(
 	cfg *config.Config,
 	mitmInterceptor *mitm.Interceptor,
 	collector *stats.Collector,
 	logger *slog.Logger,
-) (func() *probe.PluginsData, error) {
+) (*pluginsResult, error) {
 	if len(cfg.Plugins) == 0 || mitmInterceptor == nil {
-		return nil, nil
+		return &pluginsResult{}, nil
 	}
 
 	// Convert config.PluginConf to plugin.PluginConfig.
@@ -801,6 +812,7 @@ func initPlugins(
 			Placeholder: pc.Placeholder,
 			Domains:     pc.Domains,
 			Options:     opts,
+			Priority:    pc.Priority,
 		}
 	}
 
@@ -825,19 +837,34 @@ func initPlugins(
 
 	logger.Info("plugins initialized", "active", len(results))
 
-	dataFn := func() *probe.PluginsData {
-		pd := &probe.PluginsData{Active: len(results)}
-		for _, r := range results {
-			pd.Plugins = append(pd.Plugins, probe.PluginInfo{
-				Name:    r.Plugin.Name(),
-				Version: r.Plugin.Version(),
-				Mode:    r.Config.Mode,
-				Domains: r.Config.Domains,
-			})
-		}
-		return pd
+	res := &pluginsResult{
+		dataFn: func() *probe.PluginsData {
+			pd := &probe.PluginsData{Active: len(results)}
+			for _, r := range results {
+				pd.Plugins = append(pd.Plugins, probe.PluginInfo{
+					Name:    r.Plugin.Name(),
+					Version: r.Plugin.Version(),
+					Mode:    r.Config.Mode,
+					Domains: r.Config.Domains,
+				})
+			}
+			return pd
+		},
 	}
-	return dataFn, nil
+
+	// Extract rewrite plugin store and reload function for the dashboard API.
+	for _, r := range results {
+		if rw, ok := r.Plugin.(interface {
+			Store() *plugin.RewriteStore
+			ReloadRules() error
+		}); ok {
+			res.rewriteStore = rw.Store()
+			res.rewriteReload = rw.ReloadRules
+			break
+		}
+	}
+
+	return res, nil
 }
 
 // makeBlockDataFn creates a callback that gathers block stats from the blocklist.

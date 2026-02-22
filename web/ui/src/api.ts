@@ -62,3 +62,77 @@ export async function fetchLogs(
 ): Promise<LogEntry[]> {
   return apiFetch(`/logs?n=${n}&level=${level}`);
 }
+
+// --- Rewrite rules API ---
+
+export interface RewriteRule {
+  id: string;
+  name: string;
+  pattern: string;
+  replacement: string;
+  is_regex: boolean;
+  domains: string[];
+  url_patterns: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RewriteRuleInput = Omit<RewriteRule, "id" | "created_at" | "updated_at">;
+
+export async function fetchRewriteRules(): Promise<RewriteRule[]> {
+  return apiFetch("/rewrite/rules");
+}
+
+export async function createRewriteRule(rule: RewriteRuleInput): Promise<RewriteRule> {
+  return apiFetch("/rewrite/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function updateRewriteRule(id: string, rule: RewriteRuleInput): Promise<RewriteRule> {
+  return apiFetch(`/rewrite/rules/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function deleteRewriteRule(id: string): Promise<void> {
+  await apiFetch(`/rewrite/rules/${id}`, { method: "DELETE" });
+}
+
+export async function toggleRewriteRule(id: string): Promise<RewriteRule> {
+  return apiFetch(`/rewrite/rules/${id}/toggle`, { method: "PATCH" });
+}
+
+export interface RewriteTestResult {
+  result: string;
+  match_count: number;
+  valid: boolean;
+  error?: string;
+}
+
+export async function testRewritePattern(
+  pattern: string,
+  replacement: string,
+  is_regex: boolean,
+  sample: string,
+): Promise<RewriteTestResult> {
+  return apiFetch("/rewrite/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pattern, replacement, is_regex, sample }),
+  });
+}
+
+export interface RestartResult {
+  status: string;
+  message: string;
+}
+
+export async function restartProxy(): Promise<RestartResult> {
+  return apiFetch("/restart", { method: "POST" });
+}

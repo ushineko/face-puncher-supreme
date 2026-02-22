@@ -33,7 +33,7 @@ func newRedditFilter(t *testing.T, placeholder string) *redditFilter {
 		domains: []string{"www.reddit.com"},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	err := r.Init(PluginConfig{
+	err := r.Init(&PluginConfig{
 		Enabled:     true,
 		Mode:        ModeFilter,
 		Placeholder: placeholder,

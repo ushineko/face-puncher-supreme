@@ -37,7 +37,7 @@ func (r *redditFilter) Name() string      { return r.name }
 func (r *redditFilter) Version() string   { return r.version }
 func (r *redditFilter) Domains() []string { return r.domains }
 
-func (r *redditFilter) Init(cfg PluginConfig, logger *slog.Logger) error {
+func (r *redditFilter) Init(cfg *PluginConfig, logger *slog.Logger) error {
 	r.placeholder = cfg.Placeholder
 	r.logger = logger
 	if len(cfg.Domains) > 0 {
