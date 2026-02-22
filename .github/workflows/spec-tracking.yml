@@ -1,0 +1,54 @@
+name: Spec Tracking
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'specs/**'
+      - 'validation-reports/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview what would be created/closed without making changes'
+        type: boolean
+        default: true
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: spec-tracking
+  cancel-in-progress: false
+
+jobs:
+  track:
+    name: Sync Spec Issues
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine Mode
+      id: mode
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "mode=backfill" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "mode=push" >> "$GITHUB_OUTPUT"
+          echo "dry_run=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run Spec Tracking
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BEFORE_SHA: ${{ github.event.before }}
+        AFTER_SHA: ${{ github.sha }}
+      run: |
+        bash scripts/spec-tracking.sh \
+          "${{ steps.mode.outputs.mode }}" \
+          --dry-run="${{ steps.mode.outputs.dry_run }}"
