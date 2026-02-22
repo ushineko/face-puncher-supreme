@@ -278,8 +278,9 @@ create_spec_issue() {
         return
     fi
 
-    local issue_num
-    issue_num=$(gh issue create --title "$title" --body "$body" --label "$labels" --json number -q '.number')
+    local issue_url issue_num
+    issue_url=$(gh issue create --title "$title" --body "$body" --label "$labels")
+    issue_num="${issue_url##*/}"
     log "Created issue #${issue_num}: ${title}"
     echo "$issue_num"
 }
