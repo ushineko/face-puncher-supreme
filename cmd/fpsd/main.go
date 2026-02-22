@@ -172,13 +172,105 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 	return cfg, nil
 }
 
-func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,cyclop // main entry point
+// ---------------------------------------------------------------------------
+// Result types for multi-value init returns.
+// ---------------------------------------------------------------------------
+
+// blocklistResult holds initialized blocklist resources.
+type blocklistResult struct {
+	bl          *blocklist.DB
+	blocker     proxy.Blocker           // nil if no entries
+	blockDataFn func() *probe.BlockData // nil if no entries
+}
+
+// mitmResult holds initialized MITM resources. Zero-valued when MITM is disabled.
+type mitmResult struct {
+	interceptor  *mitm.Interceptor
+	caPEMHandler http.HandlerFunc
+	dataFn       func() *probe.MITMData
+}
+
+// ---------------------------------------------------------------------------
+// runProxy — main entry point, orchestrates subsystem initialization.
+// ---------------------------------------------------------------------------
+
+func runProxy(cmd *cobra.Command, _ []string) error {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
 	}
 
-	// Create log buffer for dashboard live log viewer.
+	logBuf, logResult := initLogging(&cfg)
+	defer logResult.Cleanup()
+	logger := logResult.Logger
+
+	blRes, err := initBlocklist(&cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer blRes.bl.Close() //nolint:errcheck // best-effort on shutdown
+
+	collector := stats.NewCollector()
+
+	mr, err := initMITM(&cfg, blRes.bl, logger, collector)
+	if err != nil {
+		return err
+	}
+
+	pluginsDataFn, err := initPlugins(&cfg, mr.interceptor, collector, logger)
+	if err != nil {
+		return err
+	}
+
+	statsDB, err := initStatsDB(&cfg, collector, blRes.bl, logger)
+	if err != nil {
+		return err
+	}
+	if statsDB != nil {
+		defer statsDB.Close() //nolint:errcheck // best-effort on shutdown (includes final flush)
+	}
+
+	transparentDataFn := makeTransparentDataFn(&cfg, mr.interceptor != nil, logger)
+
+	// Create the proxy server with placeholder handlers (replaced after srv exists).
+	srv := proxy.New(&proxy.Config{
+		ListenAddr:        cfg.Listen,
+		Logger:            logger,
+		Verbose:           cfg.Verbose,
+		Blocker:           blRes.blocker,
+		MITMInterceptor:   mr.interceptor,
+		ConnectTimeout:    cfg.Timeouts.Connect.Duration,
+		ReadHeaderTimeout: cfg.Timeouts.ReadHeader.Duration,
+		ManagementPrefix:  cfg.Management.PathPrefix,
+		HeartbeatHandler:  http.NotFound, // placeholder
+		StatsHandler:      http.NotFound, // placeholder
+		CAPEMHandler:      mr.caPEMHandler,
+		OnRequest:         collector.RecordRequest,
+		OnTunnelClose:     collector.RecordBytes,
+	})
+
+	statsProvider := initHandlers(&cfg, srv, collector, statsDB,
+		blRes.blockDataFn, mr.dataFn, transparentDataFn, pluginsDataFn, logger)
+
+	defer initDashboard(&cfg, srv, statsProvider,
+		blRes.blockDataFn, mr.dataFn, transparentDataFn, pluginsDataFn,
+		blRes.bl, logBuf, logResult.LevelVar, logger)()
+
+	if statsDB != nil {
+		statsDB.Start()
+	}
+
+	tpListener := initTransparentListener(&cfg, blRes.blocker, mr.interceptor, collector, logger)
+
+	return runServers(&cfg, srv, tpListener, blRes.bl, logger)
+}
+
+// ---------------------------------------------------------------------------
+// Subsystem initialization helpers (called by runProxy in order).
+// ---------------------------------------------------------------------------
+
+// initLogging creates the log buffer and configures structured logging.
+func initLogging(cfg *config.Config) (*logbuf.Buffer, logging.Result) {
 	logBuf := logbuf.New(1000)
 
 	logResult := logging.Setup(logging.Config{
@@ -186,17 +278,19 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		Verbose:       cfg.Verbose,
 		ExtraHandlers: []slog.Handler{logBuf.Handler()},
 	})
-	defer logResult.Cleanup()
-	logger := logResult.Logger
 
+	return logBuf, logResult
+}
+
+// initBlocklist opens the blocklist database, performs first-run fetch if
+// needed, and configures allowlist and inline entries.
+func initBlocklist(cfg *config.Config, logger *slog.Logger) (*blocklistResult, error) {
 	dbPath := filepath.Join(cfg.DataDir, "blocklist.db")
 
-	// Open or create the blocklist database.
 	bl, err := blocklist.Open(dbPath, logger)
 	if err != nil {
-		return fmt.Errorf("open blocklist: %w", err)
+		return nil, fmt.Errorf("open blocklist: %w", err)
 	}
-	defer bl.Close() //nolint:errcheck // best-effort on shutdown
 
 	// If blocklist URLs are configured and no existing data, fetch on first run.
 	if len(cfg.BlocklistURLs) > 0 && bl.Size() == 0 {
@@ -221,144 +315,148 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		"db_path", dbPath,
 	)
 
-	var blocker proxy.Blocker
-	var blockDataFn func() *probe.BlockData
-
+	res := &blocklistResult{bl: bl}
 	if bl.Size() > 0 || bl.AllowlistSize() > 0 {
-		blocker = bl
-		blockDataFn = makeBlockDataFn(bl)
+		res.blocker = bl
+		res.blockDataFn = makeBlockDataFn(bl)
 	}
 
-	// Initialize stats collector (always active for in-memory counters).
-	collector := stats.NewCollector()
+	return res, nil
+}
 
-	// Initialize MITM interceptor if domains are configured.
-	var mitmInterceptor *mitm.Interceptor
-	var caPEMHandler http.HandlerFunc
-	var mitmDataFn func() *probe.MITMData
+// initMITM loads the CA and creates the MITM interceptor. Returns a zero
+// mitmResult if no MITM domains are configured.
+func initMITM(cfg *config.Config, bl *blocklist.DB, logger *slog.Logger, collector *stats.Collector) (mitmResult, error) {
+	if len(cfg.MITM.Domains) == 0 {
+		logger.Info("mitm disabled")
+		return mitmResult{}, nil
+	}
 
-	if len(cfg.MITM.Domains) > 0 {
-		certPath := filepath.Join(cfg.DataDir, cfg.MITM.CACert)
-		keyPath := filepath.Join(cfg.DataDir, cfg.MITM.CAKey)
+	certPath := filepath.Join(cfg.DataDir, cfg.MITM.CACert)
+	keyPath := filepath.Join(cfg.DataDir, cfg.MITM.CAKey)
 
-		ca, caErr := mitm.LoadCA(certPath, keyPath)
-		if caErr != nil {
-			return fmt.Errorf("mitm: %w (run 'fpsd generate-ca' to create CA files)", caErr)
-		}
+	ca, caErr := mitm.LoadCA(certPath, keyPath)
+	if caErr != nil {
+		return mitmResult{}, fmt.Errorf("mitm: %w (run 'fpsd generate-ca' to create CA files)", caErr)
+	}
 
-		// Warn about domains in both MITM and blocklist.
-		for _, d := range cfg.MITM.Domains {
-			if bl.Size() > 0 && bl.IsBlocked(strings.ToLower(d)) {
-				logger.Warn("mitm domain is also in blocklist (will be blocked, not intercepted)",
-					"domain", d,
-				)
-			}
-		}
-
-		mitmInterceptor = mitm.NewInterceptor(&mitm.InterceptorConfig{
-			CA:             ca,
-			Domains:        cfg.MITM.Domains,
-			Logger:         logger,
-			Verbose:        cfg.Verbose,
-			ConnectTimeout: cfg.Timeouts.Connect.Duration,
-			OnMITMRequest:  collector.RecordMITMRequest,
-		})
-
-		// CA cert download handler.
-		caPEM := ca.CertPEM
-		caPEMHandler = func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/x-pem-file")
-			w.Header().Set("Content-Disposition", "attachment; filename=fps-ca.pem")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(caPEM) //nolint:gosec // best-effort response
-		}
-
-		mitmDataFn = func() *probe.MITMData {
-			return &probe.MITMData{
-				Enabled:           true,
-				InterceptsTotal:   mitmInterceptor.InterceptsTotal.Load(),
-				DomainsConfigured: mitmInterceptor.Domains(),
-			}
-		}
-
-		// Check CA expiry.
-		daysUntilExpiry := time.Until(ca.NotAfter).Hours() / 24
-		if daysUntilExpiry < 30 {
-			logger.Warn("mitm CA certificate expires soon",
-				"expires", ca.NotAfter.Format("2006-01-02"),
-				"days_remaining", int(daysUntilExpiry),
+	// Warn about domains in both MITM and blocklist.
+	for _, d := range cfg.MITM.Domains {
+		if bl.Size() > 0 && bl.IsBlocked(strings.ToLower(d)) {
+			logger.Warn("mitm domain is also in blocklist (will be blocked, not intercepted)",
+				"domain", d,
 			)
 		}
-
-		logger.Info("mitm enabled",
-			"domains", len(cfg.MITM.Domains),
-			"domain_list", cfg.MITM.Domains,
-			"ca_fingerprint", ca.Fingerprint,
-			"ca_expires", ca.NotAfter.Format("2006-01-02"),
-		)
-	} else {
-		logger.Info("mitm disabled")
 	}
 
-	// Initialize content filter plugins.
-	pluginsDataFn, err := initPlugins(&cfg, mitmInterceptor, collector, logger)
-	if err != nil {
-		return err
-	}
-
-	// Initialize stats DB if enabled.
-	var statsDB *stats.DB
-	var statsProvider *probe.StatsProvider
-	if cfg.Stats.Enabled {
-		statsDBPath := filepath.Join(cfg.DataDir, "stats.db")
-		statsDB, err = stats.Open(statsDBPath, collector, logger, cfg.Stats.FlushInterval.Duration)
-		if err != nil {
-			return fmt.Errorf("open stats db: %w", err)
-		}
-		defer statsDB.Close() //nolint:errcheck // best-effort on shutdown (includes final flush)
-
-		statsDB.SetAllowStatsSource(bl.SnapshotAllowCounts)
-
-		logger.Info("stats database initialized",
-			"path", statsDBPath,
-			"flush_interval", cfg.Stats.FlushInterval.Duration,
-		)
-	}
-
-	// Build transparent data callback.
-	var transparentDataFn func() *probe.TransparentData
-	if cfg.Transparent.Enabled {
-		transparentDataFn = func() *probe.TransparentData {
-			return &probe.TransparentData{
-				Enabled:   true,
-				HTTPAddr:  cfg.Transparent.HTTPAddr,
-				HTTPSAddr: cfg.Transparent.HTTPSAddr,
-			}
-		}
-		if mitmInterceptor == nil {
-			logger.Info("transparent mode enabled without MITM — HTTPS domains will be tunneled only")
-		}
-	}
-
-	// Create the proxy server with placeholder handlers (replaced after srv exists).
-	srv := proxy.New(&proxy.Config{
-		ListenAddr:        cfg.Listen,
-		Logger:            logger,
-		Verbose:           cfg.Verbose,
-		Blocker:           blocker,
-		MITMInterceptor:   mitmInterceptor,
-		ConnectTimeout:    cfg.Timeouts.Connect.Duration,
-		ReadHeaderTimeout: cfg.Timeouts.ReadHeader.Duration,
-		ManagementPrefix:  cfg.Management.PathPrefix,
-		HeartbeatHandler:  http.NotFound, // placeholder
-		StatsHandler:      http.NotFound, // placeholder
-		CAPEMHandler:      caPEMHandler,
-		OnRequest:         collector.RecordRequest,
-		OnTunnelClose:     collector.RecordBytes,
+	interceptor := mitm.NewInterceptor(&mitm.InterceptorConfig{
+		CA:             ca,
+		Domains:        cfg.MITM.Domains,
+		Logger:         logger,
+		Verbose:        cfg.Verbose,
+		ConnectTimeout: cfg.Timeouts.Connect.Duration,
+		OnMITMRequest:  collector.RecordMITMRequest,
 	})
 
-	// Now build real handlers with the actual ServerInfo (srv).
+	// CA cert download handler.
+	caPEM := ca.CertPEM
+	caPEMHandler := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", "attachment; filename=fps-ca.pem")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(caPEM) //nolint:gosec // best-effort response
+	}
+
+	dataFn := func() *probe.MITMData {
+		return &probe.MITMData{
+			Enabled:           true,
+			InterceptsTotal:   interceptor.InterceptsTotal.Load(),
+			DomainsConfigured: interceptor.Domains(),
+		}
+	}
+
+	// Check CA expiry.
+	daysUntilExpiry := time.Until(ca.NotAfter).Hours() / 24
+	if daysUntilExpiry < 30 {
+		logger.Warn("mitm CA certificate expires soon",
+			"expires", ca.NotAfter.Format("2006-01-02"),
+			"days_remaining", int(daysUntilExpiry),
+		)
+	}
+
+	logger.Info("mitm enabled",
+		"domains", len(cfg.MITM.Domains),
+		"domain_list", cfg.MITM.Domains,
+		"ca_fingerprint", ca.Fingerprint,
+		"ca_expires", ca.NotAfter.Format("2006-01-02"),
+	)
+
+	return mitmResult{
+		interceptor:  interceptor,
+		caPEMHandler: caPEMHandler,
+		dataFn:       dataFn,
+	}, nil
+}
+
+// initStatsDB opens the stats database if enabled. Returns (nil, nil) when
+// stats are disabled in config.
+func initStatsDB(cfg *config.Config, collector *stats.Collector, bl *blocklist.DB, logger *slog.Logger) (*stats.DB, error) {
+	if !cfg.Stats.Enabled {
+		return nil, nil
+	}
+
+	statsDBPath := filepath.Join(cfg.DataDir, "stats.db")
+	statsDB, err := stats.Open(statsDBPath, collector, logger, cfg.Stats.FlushInterval.Duration)
+	if err != nil {
+		return nil, fmt.Errorf("open stats db: %w", err)
+	}
+
+	statsDB.SetAllowStatsSource(bl.SnapshotAllowCounts)
+
+	logger.Info("stats database initialized",
+		"path", statsDBPath,
+		"flush_interval", cfg.Stats.FlushInterval.Duration,
+	)
+
+	return statsDB, nil
+}
+
+// makeTransparentDataFn creates a TransparentData callback for probe responses.
+// Returns nil if transparent mode is disabled.
+func makeTransparentDataFn(cfg *config.Config, mitmEnabled bool, logger *slog.Logger) func() *probe.TransparentData {
+	if !cfg.Transparent.Enabled {
+		return nil
+	}
+
+	if !mitmEnabled {
+		logger.Info("transparent mode enabled without MITM — HTTPS domains will be tunneled only")
+	}
+
+	return func() *probe.TransparentData {
+		return &probe.TransparentData{
+			Enabled:   true,
+			HTTPAddr:  cfg.Transparent.HTTPAddr,
+			HTTPSAddr: cfg.Transparent.HTTPSAddr,
+		}
+	}
+}
+
+// initHandlers creates the management endpoint handlers and wires them into
+// the proxy server. Returns a StatsProvider for use by the dashboard (may be nil).
+func initHandlers(
+	cfg *config.Config,
+	srv *proxy.Server,
+	collector *stats.Collector,
+	statsDB *stats.DB,
+	blockDataFn func() *probe.BlockData,
+	mitmDataFn func() *probe.MITMData,
+	transparentDataFn func() *probe.TransparentData,
+	pluginsDataFn func() *probe.PluginsData,
+	logger *slog.Logger,
+) *probe.StatsProvider {
 	heartbeatHandler := probe.HeartbeatHandler(srv, blockDataFn, mitmDataFn, transparentDataFn, pluginsDataFn)
+
+	var statsProvider *probe.StatsProvider
 	var statsHandler http.HandlerFunc
 	if cfg.Stats.Enabled {
 		statsProvider = &probe.StatsProvider{
@@ -367,95 +465,134 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 			MITMFn:        mitmDataFn,
 			TransparentFn: transparentDataFn,
 			PluginsFn:     pluginsDataFn,
-			StatsDB:   statsDB,
-			Collector: collector,
-			Resolver:  probe.NewReverseDNS(5 * time.Minute),
+			StatsDB:       statsDB,
+			Collector:     collector,
+			Resolver:      probe.NewReverseDNS(5 * time.Minute),
 		}
 		statsHandler = probe.StatsHandler(statsProvider)
 	} else {
 		statsHandler = probe.StatsDisabledHandler()
 	}
+
 	srv.SetHandlers(heartbeatHandler, statsHandler)
+	_ = logger // consistent parameter list; used for future error logging
 
-	// Initialize dashboard if credentials are configured.
-	if cfg.Dashboard.Username != "" && cfg.Dashboard.Password != "" {
-		dashboard := web.NewDashboard(&web.DashboardConfig{
-			PathPrefix: cfg.Management.PathPrefix,
-			Username:   cfg.Dashboard.Username,
-			Password:   cfg.Dashboard.Password,
-			DevMode:    flagDashboardDev,
-			LogBuffer:  logBuf,
-			HeartbeatJSON: func() ([]byte, error) {
-				resp := probe.BuildHeartbeat(srv, blockDataFn, mitmDataFn, transparentDataFn, pluginsDataFn)
-				return json.Marshal(resp)
-			},
-			StatsJSON: func() ([]byte, error) {
-				if statsProvider != nil {
-					resp := probe.BuildStats(statsProvider, 25, nil)
-					return json.Marshal(resp)
-				}
-				return json.Marshal(map[string]string{"status": "stats disabled"})
-			},
-			ConfigJSON: func() ([]byte, error) {
-				redacted := cfg.Redacted()
-				return json.Marshal(redacted)
-			},
-			ReloadFn: makeReloadFn(&cfg, bl, logBuf, logResult.LevelVar, logger),
-			Logger:   logger,
-		})
-		dashboard.Start()
-		defer dashboard.Stop()
-		srv.SetDashboardHandler(dashboard)
-		logger.Info("dashboard enabled",
-			"url", "http://"+cfg.Listen+cfg.Management.PathPrefix+"/dashboard/",
-			"dev_mode", flagDashboardDev,
-		)
-	} else {
+	return statsProvider
+}
+
+// initDashboard creates and starts the web dashboard if credentials are
+// configured. Returns a cleanup function that stops the dashboard (no-op if
+// dashboard is disabled).
+func initDashboard(
+	cfg *config.Config,
+	srv *proxy.Server,
+	statsProvider *probe.StatsProvider,
+	blockDataFn func() *probe.BlockData,
+	mitmDataFn func() *probe.MITMData,
+	transparentDataFn func() *probe.TransparentData,
+	pluginsDataFn func() *probe.PluginsData,
+	bl *blocklist.DB,
+	logBuf *logbuf.Buffer,
+	levelVar *slog.LevelVar,
+	logger *slog.Logger,
+) func() {
+	if cfg.Dashboard.Username == "" || cfg.Dashboard.Password == "" {
 		logger.Info("dashboard disabled (no credentials configured)")
+		return func() {}
 	}
 
-	// Start stats flush loop.
-	if statsDB != nil {
-		statsDB.Start()
+	dashboard := web.NewDashboard(&web.DashboardConfig{
+		PathPrefix: cfg.Management.PathPrefix,
+		Username:   cfg.Dashboard.Username,
+		Password:   cfg.Dashboard.Password,
+		DevMode:    flagDashboardDev,
+		LogBuffer:  logBuf,
+		HeartbeatJSON: func() ([]byte, error) {
+			resp := probe.BuildHeartbeat(srv, blockDataFn, mitmDataFn, transparentDataFn, pluginsDataFn)
+			return json.Marshal(resp)
+		},
+		StatsJSON: func() ([]byte, error) {
+			if statsProvider != nil {
+				resp := probe.BuildStats(statsProvider, 25, nil)
+				return json.Marshal(resp)
+			}
+			return json.Marshal(map[string]string{"status": "stats disabled"})
+		},
+		ConfigJSON: func() ([]byte, error) {
+			redacted := cfg.Redacted()
+			return json.Marshal(redacted)
+		},
+		ReloadFn: makeReloadFn(cfg, bl, logBuf, levelVar, logger),
+		Logger:   logger,
+	})
+	dashboard.Start()
+	srv.SetDashboardHandler(dashboard)
+
+	logger.Info("dashboard enabled",
+		"url", "http://"+cfg.Listen+cfg.Management.PathPrefix+"/dashboard/",
+		"dev_mode", flagDashboardDev,
+	)
+
+	return dashboard.Stop
+}
+
+// initTransparentListener creates the transparent proxy listener if enabled.
+// Returns nil if transparent mode is disabled.
+func initTransparentListener(
+	cfg *config.Config,
+	blocker proxy.Blocker,
+	mitmInterceptor *mitm.Interceptor,
+	collector *stats.Collector,
+	logger *slog.Logger,
+) *transparent.Listener {
+	if !cfg.Transparent.Enabled {
+		return nil
 	}
 
-	// Initialize transparent proxy listener if enabled.
-	var tpListener *transparent.Listener
-	if cfg.Transparent.Enabled {
-		tpListener = transparent.New(&transparent.Config{
-			HTTPAddr:        cfg.Transparent.HTTPAddr,
-			HTTPSAddr:       cfg.Transparent.HTTPSAddr,
-			Logger:          logger,
-			Verbose:         cfg.Verbose,
-			Blocker:         blocker,
-			MITMInterceptor: mitmInterceptor,
-			ConnectTimeout:  cfg.Timeouts.Connect.Duration,
-			OnRequest:       collector.RecordRequest,
-			OnTunnelClose:   collector.RecordBytes,
-			OnTransparentHTTP: func() {
-				collector.TransparentHTTP.Add(1)
-			},
-			OnTransparentTLS: func() {
-				collector.TransparentTLS.Add(1)
-			},
-			OnTransparentMITM: func() {
-				collector.TransparentMITM.Add(1)
-			},
-			OnTransparentBlock: func() {
-				collector.TransparentBlock.Add(1)
-			},
-			OnSNIMissing: func() {
-				collector.SNIMissing.Add(1)
-			},
-		})
+	tpListener := transparent.New(&transparent.Config{
+		HTTPAddr:        cfg.Transparent.HTTPAddr,
+		HTTPSAddr:       cfg.Transparent.HTTPSAddr,
+		Logger:          logger,
+		Verbose:         cfg.Verbose,
+		Blocker:         blocker,
+		MITMInterceptor: mitmInterceptor,
+		ConnectTimeout:  cfg.Timeouts.Connect.Duration,
+		OnRequest:       collector.RecordRequest,
+		OnTunnelClose:   collector.RecordBytes,
+		OnTransparentHTTP: func() {
+			collector.TransparentHTTP.Add(1)
+		},
+		OnTransparentTLS: func() {
+			collector.TransparentTLS.Add(1)
+		},
+		OnTransparentMITM: func() {
+			collector.TransparentMITM.Add(1)
+		},
+		OnTransparentBlock: func() {
+			collector.TransparentBlock.Add(1)
+		},
+		OnSNIMissing: func() {
+			collector.SNIMissing.Add(1)
+		},
+	})
 
-		logger.Info("transparent proxy enabled",
-			"http_addr", cfg.Transparent.HTTPAddr,
-			"https_addr", cfg.Transparent.HTTPSAddr,
-		)
-	}
+	logger.Info("transparent proxy enabled",
+		"http_addr", cfg.Transparent.HTTPAddr,
+		"https_addr", cfg.Transparent.HTTPSAddr,
+	)
 
-	// Graceful shutdown on SIGINT/SIGTERM.
+	return tpListener
+}
+
+// runServers starts the proxy and transparent listeners, waits for a shutdown
+// signal, then performs ordered graceful shutdown.
+func runServers(
+	cfg *config.Config,
+	srv *proxy.Server,
+	tpListener *transparent.Listener,
+	bl *blocklist.DB,
+	logger *slog.Logger,
+) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -478,7 +615,6 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 		}
 	}()
 
-	// Start transparent listeners in a separate goroutine.
 	if tpListener != nil {
 		go func() {
 			if err := tpListener.ListenAndServe(); err != nil {
@@ -507,6 +643,10 @@ func runProxy(cmd *cobra.Command, _ []string) error { //nolint:gocognit,gocyclo,
 	logger.Info("proxy stopped")
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Existing helpers (unchanged).
+// ---------------------------------------------------------------------------
 
 // makeReloadFn creates a function that re-reads config and hot-reloads subsystems.
 func makeReloadFn(
