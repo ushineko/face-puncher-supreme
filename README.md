@@ -569,6 +569,11 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.8 — 2026-02-22
+
+- refactor: break `runProxy()` god function (334 lines) into 9 named init helpers — function now reads as a table of contents (~55 lines of logic), complexity nolint suppressions removed (spec 018)
+- refactor: deduplicate `Flush()` domain-level blocks in stats DB — extract `flushDomainDeltas()` helper replacing 3 identical delta-upsert blocks
+
 ### v1.3.7 — 2026-02-21
 
 - feat: Reddit iOS app ad filtering — strip promoted content from GraphQL API responses (`gql-fed.reddit.com`) used by the Reddit iOS app (spec 017)
