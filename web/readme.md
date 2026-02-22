@@ -14,6 +14,115 @@ Runs as a single Go binary with an embedded React dashboard. Supports both expli
 
 **Tested on**: Chromium, Safari (macOS), iOS/iPadOS (transparent mode), Windows (transparent mode).
 
+## Table of Contents
+
+- [Network Architecture](#network-architecture)
+- [Quick Start (Arch / CachyOS)](#quick-start-arch--cachyos)
+- [Quick Start (from source)](#quick-start-from-source)
+- [Build](#build)
+- [Configuration](#configuration)
+- [Run](#run)
+- [CLI Flags](#cli-flags)
+- [Domain Blocking](#domain-blocking)
+- [Allowlist and Inline Blocklist](#allowlist-and-inline-blocklist)
+- [MITM TLS Interception](#mitm-tls-interception)
+- [Content Filter Plugins](#content-filter-plugins)
+- [Web Dashboard](#web-dashboard)
+- [Transparent Proxying](#transparent-proxying)
+- [Management Endpoints](#management-endpoints)
+- [Logging](#logging)
+- [Install / Uninstall](#install--uninstall)
+- [Arch Linux Package](#arch-linux-package)
+- [Test](#test)
+- [Lint](#lint)
+- [Project Structure](#project-structure)
+- [License](#license)
+- [Changelog](#changelog)
+
+## Network Architecture
+
+### Simple: Application Proxy
+
+The simplest setup — run fpsd on any Linux box on your network and point browsers or devices at it as an HTTP proxy. No iptables, no gateway role needed. Clients that are configured to use the proxy get ad blocking; everything else is unaffected.
+
+```mermaid
+graph LR
+    subgraph LAN["LAN Clients"]
+        phone["📱 iPhone / iPad"]
+        laptop["💻 Laptop"]
+        tv["📺 Smart TV"]
+    end
+
+    subgraph srv["Linux Box"]
+        fpsd["fpsd<br/><i>:18737</i>"]
+    end
+
+    internet(("🌐 Internet"))
+
+    phone & laptop -- "HTTP proxy<br/>:18737" --> fpsd
+    tv -. "direct<br/>(no proxy)" .-> internet
+
+    fpsd -- "allowed" --> internet
+    fpsd -. "blocked" .-> phone & laptop
+
+    style srv fill:#1e1e1e,stroke:#3794ff,stroke-width:2px,color:#cccccc
+    style LAN fill:#252526,stroke:#3c3c3c,stroke-width:1px,color:#cccccc
+    style internet fill:#252526,stroke:#3794ff,stroke-width:2px,color:#cccccc
+    style fpsd fill:#3794ff,stroke:#cccccc,stroke-width:1px,color:#1e1e1e
+```
+
+Configure each device's HTTP proxy setting to point at the fpsd host (e.g., `192.168.86.32:18737`). On iOS/macOS, this is under Wi-Fi network settings. On desktop browsers, use the system proxy or a browser extension like FoxyProxy.
+
+### Advanced: Transparent Gateway
+
+For whole-network coverage without per-device proxy configuration, run fpsd on your Linux gateway alongside dhcpd and Pi-hole. The gateway serves as the default route for all LAN clients — dhcpd assigns IP addresses and points DNS at Pi-hole, Pi-hole handles DNS-level ad blocking, and fpsd intercepts HTTP/HTTPS traffic via iptables REDIRECT rules for content-level filtering that DNS blocking can't reach.
+
+```mermaid
+graph LR
+    subgraph LAN["LAN Clients"]
+        phone["📱 iPhone / iPad"]
+        laptop["💻 Laptop"]
+        tv["📺 Smart TV"]
+    end
+
+    subgraph gw["Linux Gateway"]
+        dhcpd["dhcpd<br/><i>IP + DNS assignment</i>"]
+        pihole["Pi-hole<br/><i>DNS blocklist</i>"]
+        iptables["iptables<br/><i>PREROUTING REDIRECT</i>"]
+        fpsd["fpsd<br/><i>transparent proxy</i>"]
+    end
+
+    internet(("🌐 Internet"))
+
+    phone & laptop & tv -- "DHCP<br/>discover" --> dhcpd
+    phone & laptop & tv -- "DNS<br/>:53" --> pihole
+    pihole -- "upstream<br/>DNS" --> internet
+
+    phone & laptop & tv -- "HTTP/S<br/>:80/:443" --> iptables
+    iptables -- ":18780/:18443" --> fpsd
+
+    fpsd -- "allowed" --> internet
+    fpsd -. "blocked" .-> phone & laptop & tv
+
+    style gw fill:#1e1e1e,stroke:#3794ff,stroke-width:2px,color:#cccccc
+    style LAN fill:#252526,stroke:#3c3c3c,stroke-width:1px,color:#cccccc
+    style internet fill:#252526,stroke:#3794ff,stroke-width:2px,color:#cccccc
+    style fpsd fill:#3794ff,stroke:#cccccc,stroke-width:1px,color:#1e1e1e
+    style pihole fill:#252526,stroke:#3c3c3c,color:#cccccc
+    style dhcpd fill:#252526,stroke:#3c3c3c,color:#cccccc
+    style iptables fill:#252526,stroke:#3c3c3c,color:#cccccc
+```
+
+**Traffic flow**:
+
+1. Clients receive their IP, gateway, and DNS server from dhcpd
+2. DNS queries go to Pi-hole, which blocks known ad domains at the DNS level
+3. HTTP/HTTPS traffic is routed to the gateway (default route), where iptables REDIRECT rules send ports 80/443 to fpsd's transparent listeners
+4. fpsd checks its blocklist, applies MITM + content filters for configured domains, and forwards everything else upstream
+5. Blocked requests get a TCP close (HTTPS) or a minimal block page (HTTP)
+
+See [Transparent Proxying](#transparent-proxying) for setup instructions.
+
 ## Quick Start (Arch / CachyOS)
 
 The `fpsd-git` package is published to the AUR.
@@ -57,30 +166,6 @@ curl -s http://localhost:18737/fps/heartbeat | python3 -m json.tool
 ```
 
 `fps-ctl install` copies the binary, config, and systemd unit to XDG directories and starts the service. Edit `~/.config/fpsd/fpsd.yml` to configure blocklists, dashboard credentials, and MITM domains. See [Configuration](#configuration) for details.
-
-## Table of Contents
-
-- [Quick Start (Arch / CachyOS)](#quick-start-arch--cachyos)
-- [Quick Start (from source)](#quick-start-from-source)
-- [Build](#build)
-- [Configuration](#configuration)
-- [Run](#run)
-- [CLI Flags](#cli-flags)
-- [Domain Blocking](#domain-blocking)
-- [Allowlist and Inline Blocklist](#allowlist-and-inline-blocklist)
-- [MITM TLS Interception](#mitm-tls-interception)
-- [Content Filter Plugins](#content-filter-plugins)
-- [Web Dashboard](#web-dashboard)
-- [Transparent Proxying](#transparent-proxying)
-- [Management Endpoints](#management-endpoints)
-- [Logging](#logging)
-- [Install / Uninstall](#install--uninstall)
-- [Arch Linux Package](#arch-linux-package)
-- [Test](#test)
-- [Lint](#lint)
-- [Project Structure](#project-structure)
-- [License](#license)
-- [Changelog](#changelog)
 
 ## Build
 
@@ -568,6 +653,11 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.4.1 — 2026-02-22
+
+- docs: add network architecture diagrams to README — simple (application proxy) and advanced (transparent gateway with dhcpd + Pi-hole) deployment examples with mermaid diagrams
+- feat: mermaid diagram rendering in web dashboard About page — dark-themed SVG output matching the dashboard palette
 
 ### v1.4.0 — 2026-02-22
 

@@ -1,6 +1,69 @@
-import { Children, isValidElement } from "react";
+import { Children, isValidElement, useEffect, useRef, useState } from "react";
+import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "dark",
+  themeVariables: {
+    primaryColor: "#3794ff",
+    primaryTextColor: "#cccccc",
+    primaryBorderColor: "#3c3c3c",
+    lineColor: "#3c3c3c",
+    secondaryColor: "#252526",
+    tertiaryColor: "#1e1e1e",
+    background: "#1e1e1e",
+    mainBkg: "#252526",
+    nodeBorder: "#3c3c3c",
+    clusterBkg: "#1e1e1e",
+    clusterBorder: "#3c3c3c",
+    titleColor: "#cccccc",
+    edgeLabelBackground: "#252526",
+  },
+});
+
+let mermaidCounter = 0;
+
+function MermaidBlock({ source }: { source: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = `mermaid-${++mermaidCounter}`;
+    let cancelled = false;
+
+    mermaid
+      .render(id, source.trim())
+      .then(({ svg }) => {
+        if (!cancelled && containerRef.current) {
+          containerRef.current.innerHTML = svg;
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  if (error) {
+    return (
+      <code className="block bg-vsc-bg border border-vsc-border rounded p-3 text-xs overflow-auto my-3">
+        {source}
+      </code>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="my-3 overflow-auto flex justify-center"
+    />
+  );
+}
 
 interface MarkdownProps {
   content: string;
@@ -90,6 +153,10 @@ export default function Markdown({ content }: MarkdownProps) {
             );
           },
           code: ({ className, children }) => {
+            if (className === "language-mermaid") {
+              const source = extractText(children);
+              return <MermaidBlock source={source} />;
+            }
             const isBlock = className?.includes("language-");
             if (isBlock) {
               return (
