@@ -65,6 +65,7 @@ mitm:
   domains:
     - www.reddit.com
     - old.reddit.com
+    - gql-fed.reddit.com
 
 # Content filter plugins — site-specific filters for MITM'd domains.
 # Each plugin targets a set of domains and operates in "intercept" or "filter" mode.
@@ -75,6 +76,7 @@ plugins:
     placeholder: "visible"   # "visible", "comment", or "none"
     domains:
       - www.reddit.com
+      - gql-fed.reddit.com
     options:
       log_matches: true
 

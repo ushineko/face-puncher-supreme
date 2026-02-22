@@ -1,6 +1,8 @@
 package plugin
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,8 +67,9 @@ func TestRedditFilterRegistered(t *testing.T) {
 
 	p := constructor()
 	assert.Equal(t, "reddit-promotions", p.Name())
-	assert.Equal(t, "0.2.0", p.Version())
+	assert.Equal(t, "0.3.0", p.Version())
 	assert.Contains(t, p.Domains(), "www.reddit.com")
+	assert.Contains(t, p.Domains(), "gql-fed.reddit.com")
 }
 
 // --- Feed ad removal (R1) ---
@@ -388,6 +391,293 @@ func TestMultipleRulesInSingleResponse(t *testing.T) {
 	assert.Contains(t, outStr, "organic")
 	assert.NotContains(t, outStr, "shreddit-ad-post")
 	assert.NotContains(t, outStr, "shreddit-comments-page-ad")
+}
+
+// --- GraphQL helpers ---
+
+func gqlRequest(opName string) *http.Request {
+	r := &http.Request{
+		Method: "POST",
+		URL:    &url.URL{Scheme: "https", Host: "gql-fed.reddit.com", Path: "/"},
+		Host:   "gql-fed.reddit.com",
+		Header: http.Header{"Content-Type": []string{"application/json"}},
+	}
+	if opName != "" {
+		r.Header.Set("X-Apollo-Operation-Name", opName)
+	}
+	return r
+}
+
+func jsonResp() *http.Response {
+	return &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+}
+
+// jsonGet navigates a JSON doc and returns the value at the given path.
+func jsonGet[T any](t *testing.T, data []byte, keys ...string) T {
+	t.Helper()
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(data, &doc))
+	val, ok := jsonPath[T](doc, keys...)
+	require.True(t, ok, "jsonPath %v not found", keys)
+	return val
+}
+
+// --- HomeFeedSdui tests ---
+
+func TestFilterHomeFeed(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "homefeed_sdui.json")
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.True(t, fr.Matched)
+	assert.True(t, fr.Modified)
+	assert.Equal(t, "feed-sdui-ad", fr.Rule)
+	assert.Equal(t, 2, fr.Removed)
+
+	// 3 organic edges remain.
+	edges := jsonGet[[]any](t, out, "data", "homeV3", "elements", "edges")
+	assert.Len(t, edges, 3)
+
+	for i, edge := range edges {
+		em, ok := edge.(map[string]any)
+		require.True(t, ok, "edge %d should be a map", i)
+		node, ok := em["node"].(map[string]any)
+		require.True(t, ok, "edge %d node should be a map", i)
+		assert.Nil(t, node["adPayload"], "edge %d should be organic", i)
+	}
+}
+
+func TestFilterHomeFeedNoAds(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "homefeed_sdui_no_ads.json")
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.False(t, fr.Matched)
+	assert.False(t, fr.Modified)
+
+	edges := jsonGet[[]any](t, out, "data", "homeV3", "elements", "edges")
+	assert.Len(t, edges, 3)
+}
+
+func TestFilterHomeFeedLastEdgeIsAd(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "homefeed_sdui_last_ad.json")
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fr.Removed)
+
+	edges := jsonGet[[]any](t, out, "data", "homeV3", "elements", "edges")
+	assert.Len(t, edges, 2)
+
+	// endCursor should be updated to last organic edge's groupId.
+	cursor := jsonGet[string](t, out, "data", "homeV3", "elements", "pageInfo", "endCursor")
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	require.NoError(t, err)
+	assert.Equal(t, "t3_test002", string(decoded))
+}
+
+func TestFilterHomeFeedVisiblePlaceholder(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderVisible)
+	body := loadFixture(t, "homefeed_sdui.json")
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fr.Removed)
+
+	// 3 organic + 2 placeholders = 5 edges.
+	edges := jsonGet[[]any](t, out, "data", "homeV3", "elements", "edges")
+	assert.Len(t, edges, 5)
+
+	phCount := 0
+	for _, edge := range edges {
+		if em, ok := edge.(map[string]any); ok {
+			if _, has := em["fps_filtered"]; has {
+				phCount++
+			}
+		}
+	}
+	assert.Equal(t, 2, phCount)
+}
+
+// --- FeedPostDetailsByIds tests ---
+
+func TestFilterFeedDetails(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "feed_details.json")
+
+	out, fr, err := r.Filter(gqlRequest("FeedPostDetailsByIds"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.True(t, fr.Matched)
+	assert.True(t, fr.Modified)
+	assert.Equal(t, "feed-details-ad", fr.Rule)
+	assert.Equal(t, 2, fr.Removed)
+
+	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
+	assert.Len(t, posts, 3)
+
+	for i, post := range posts {
+		pm, ok := post.(map[string]any)
+		require.True(t, ok, "post %d should be a map", i)
+		assert.Equal(t, "SubredditPost", pm["__typename"], "post %d", i)
+	}
+}
+
+func TestFilterFeedDetailsNoAds(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "feed_details_no_ads.json")
+
+	out, fr, err := r.Filter(gqlRequest("FeedPostDetailsByIds"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.False(t, fr.Matched)
+	assert.False(t, fr.Modified)
+
+	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
+	assert.Len(t, posts, 2)
+}
+
+func TestFilterFeedDetailsVisiblePlaceholder(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderVisible)
+	body := loadFixture(t, "feed_details.json")
+
+	out, fr, err := r.Filter(gqlRequest("FeedPostDetailsByIds"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fr.Removed)
+
+	// 3 organic + 2 placeholders.
+	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
+	assert.Len(t, posts, 5)
+}
+
+// --- PdpCommentsAds tests ---
+
+func TestFilterPdpAds(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "pdp_comments_ads.json")
+
+	out, fr, err := r.Filter(gqlRequest("PdpCommentsAds"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.True(t, fr.Matched)
+	assert.True(t, fr.Modified)
+	assert.Equal(t, "pdp-comments-ad", fr.Rule)
+	assert.Equal(t, 2, fr.Removed)
+
+	adPosts := jsonGet[[]any](t, out, "data", "postInfoById", "pdpCommentsAds", "adPosts")
+	assert.Empty(t, adPosts)
+}
+
+func TestFilterPdpAdsEmpty(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "pdp_comments_ads_empty.json")
+
+	_, fr, err := r.Filter(gqlRequest("PdpCommentsAds"), jsonResp(), body)
+	require.NoError(t, err)
+
+	assert.False(t, fr.Matched)
+	assert.False(t, fr.Modified)
+}
+
+func TestFilterPdpAdsVisiblePlaceholder(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderVisible)
+	body := loadFixture(t, "pdp_comments_ads.json")
+
+	out, fr, err := r.Filter(gqlRequest("PdpCommentsAds"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fr.Removed)
+
+	adPosts := jsonGet[[]any](t, out, "data", "postInfoById", "pdpCommentsAds", "adPosts")
+	require.Len(t, adPosts, 1)
+	ph, ok := adPosts[0].(map[string]any)
+	require.True(t, ok, "placeholder should be a map")
+	assert.Contains(t, ph, "fps_filtered")
+}
+
+// --- GraphQL dispatch and edge case tests ---
+
+func TestFilterJSONPassthroughUnknownOp(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := []byte(`{"data": {"something": "else"}}`)
+
+	out, fr, err := r.Filter(gqlRequest("GetAccount"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.False(t, fr.Matched)
+	assert.Equal(t, string(body), string(out))
+}
+
+func TestFilterJSONPassthroughNoOpHeader(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := []byte(`{"data": {"something": "else"}}`)
+
+	out, fr, err := r.Filter(gqlRequest(""), jsonResp(), body)
+	require.NoError(t, err)
+	assert.False(t, fr.Matched)
+	assert.Equal(t, string(body), string(out))
+}
+
+func TestFilterJSONMalformedBody(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := []byte(`{not valid json`)
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.False(t, fr.Matched)
+	assert.Equal(t, string(body), string(out))
+}
+
+func TestFilterJSONMissingPath(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := []byte(`{"data": {"unexpected": "structure"}}`)
+
+	out, fr, err := r.Filter(gqlRequest("HomeFeedSdui"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.False(t, fr.Matched)
+	assert.Equal(t, string(body), string(out))
+}
+
+func TestFilterCommentPlaceholderMode(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderComment)
+	body := loadFixture(t, "feed_details.json")
+
+	out, fr, err := r.Filter(gqlRequest("FeedPostDetailsByIds"), jsonResp(), body)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fr.Removed)
+
+	// Comment mode uses _fps_filtered (underscore prefix).
+	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
+	phCount := 0
+	for _, post := range posts {
+		if pm, ok := post.(map[string]any); ok {
+			if _, has := pm["_fps_filtered"]; has {
+				phCount++
+			}
+		}
+	}
+	assert.Equal(t, 2, phCount)
+}
+
+func TestFilterHTMLStillWorksAfterJSONDispatch(t *testing.T) {
+	r := newRedditFilter(t, PlaceholderNone)
+	body := loadFixture(t, "feed_with_ad.html")
+
+	// HTML request should still go through HTML filtering path.
+	out, fr, err := r.Filter(makeReq("/"), makeResp(), body)
+	require.NoError(t, err)
+
+	assert.True(t, fr.Matched)
+	assert.True(t, fr.Modified)
+	assert.Equal(t, "feed-ad", fr.Rule)
+	assert.NotContains(t, string(out), "shreddit-ad-post")
 }
 
 // --- Fixture integrity checks ---

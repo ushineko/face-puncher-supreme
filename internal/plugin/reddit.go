@@ -2,14 +2,19 @@ package plugin
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 )
 
-// redditFilter strips promoted/sponsored content from Reddit's Shreddit UI.
-// It operates on server-rendered HTML responses, targeting three ad surfaces:
-// feed ads, comment-tree ads, and right-rail promoted posts.
+// redditFilter strips promoted/sponsored content from Reddit responses.
+// It handles two content types:
+//   - HTML (www.reddit.com): strips Shreddit custom elements for feed ads,
+//     comment-tree ads, and right-rail promoted posts.
+//   - JSON (gql-fed.reddit.com): strips promoted entries from GraphQL
+//     responses used by the Reddit iOS app.
 type redditFilter struct {
 	name        string
 	version     string
@@ -22,8 +27,8 @@ func init() {
 	Registry["reddit-promotions"] = func() ContentFilter {
 		return &redditFilter{
 			name:    "reddit-promotions",
-			version: "0.2.0",
-			domains: []string{"www.reddit.com"},
+			version: "0.3.0",
+			domains: []string{"www.reddit.com", "gql-fed.reddit.com"},
 		}
 	}
 }
@@ -41,8 +46,21 @@ func (r *redditFilter) Init(cfg PluginConfig, logger *slog.Logger) error {
 	return nil
 }
 
-// Filter inspects an HTML response and removes promoted content.
+// Filter inspects a response and removes promoted content. HTML responses
+// go through the Shreddit element removal rules; JSON responses go through
+// GraphQL operation-specific filters.
 func (r *redditFilter) Filter(req *http.Request, resp *http.Response, body []byte) ([]byte, FilterResult, error) {
+	ct := resp.Header.Get("Content-Type")
+
+	if isJSONContentType(ct) {
+		return r.filterJSON(req, resp, body)
+	}
+
+	return r.filterHTML(req, resp, body)
+}
+
+// filterHTML handles server-rendered Shreddit HTML responses (www.reddit.com).
+func (r *redditFilter) filterHTML(req *http.Request, _ *http.Response, body []byte) ([]byte, FilterResult, error) {
 	path := req.URL.Path
 
 	// R6: URL-scoped processing.
@@ -55,7 +73,7 @@ func (r *redditFilter) Filter(req *http.Request, resp *http.Response, body []byt
 		return body, FilterResult{}, nil
 	}
 
-	ct := resp.Header.Get("Content-Type")
+	ct := "text/html"
 	var totalRemoved int
 	var firstRule string
 	result := body
@@ -105,6 +123,251 @@ func (r *redditFilter) Filter(req *http.Request, resp *http.Response, body []byt
 		Rule:     firstRule,
 		Removed:  totalRemoved,
 	}, nil
+}
+
+// filterJSON handles GraphQL API responses (gql-fed.reddit.com) used by
+// the Reddit iOS app. Dispatches by X-Apollo-Operation-Name header.
+func (r *redditFilter) filterJSON(req *http.Request, _ *http.Response, body []byte) ([]byte, FilterResult, error) {
+	op := req.Header.Get("X-Apollo-Operation-Name")
+
+	switch op {
+	case "HomeFeedSdui":
+		return r.filterHomeFeed(body)
+	case "FeedPostDetailsByIds":
+		return r.filterFeedDetails(body)
+	case "PdpCommentsAds":
+		return r.filterPdpAds(body)
+	default:
+		return body, FilterResult{}, nil
+	}
+}
+
+// filterHomeFeed removes ad edges from the SDUI home feed response.
+// Detection: edges[i].node.adPayload != null.
+func (r *redditFilter) filterHomeFeed(body []byte) ([]byte, FilterResult, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, FilterResult{}, nil // fail open
+	}
+
+	edges, ok := jsonPath[[]any](doc, "data", "homeV3", "elements", "edges")
+	if !ok || len(edges) == 0 {
+		return body, FilterResult{}, nil
+	}
+
+	ct := "application/json"
+	marker := Marker(r.placeholder, r.name, "feed-sdui-ad", ct)
+	var filtered []any
+	var removed int
+
+	for _, edge := range edges {
+		em, ok := edge.(map[string]any)
+		if !ok {
+			filtered = append(filtered, edge)
+			continue
+		}
+		node, _ := em["node"].(map[string]any)
+		if node == nil {
+			filtered = append(filtered, edge)
+			continue
+		}
+		if node["adPayload"] != nil {
+			removed++
+			if marker != "" {
+				var ph map[string]any
+				_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
+				filtered = append(filtered, ph)
+			}
+			continue
+		}
+		filtered = append(filtered, edge)
+	}
+
+	if removed == 0 {
+		return body, FilterResult{}, nil
+	}
+
+	// Update the edges array (path existence validated by jsonPath above).
+	data := doc["data"].(map[string]any)       //nolint:errcheck // checked
+	home := data["homeV3"].(map[string]any)     //nolint:errcheck // checked
+	elements := home["elements"].(map[string]any) //nolint:errcheck // checked
+	elements["edges"] = filtered
+
+	// Update endCursor if the last original edge was an ad.
+	r.updateEndCursor(edges, filtered, elements)
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body, FilterResult{}, nil // fail open
+	}
+
+	return out, FilterResult{
+		Matched:  true,
+		Modified: true,
+		Rule:     "feed-sdui-ad",
+		Removed:  removed,
+	}, nil
+}
+
+// updateEndCursor fixes pageInfo.endCursor when the last original edge was
+// removed. The cursor must point to the last remaining organic edge's groupId.
+func (r *redditFilter) updateEndCursor(original, filtered []any, elements map[string]any) {
+	if len(original) == 0 || len(filtered) == 0 {
+		return
+	}
+
+	// Check if the original last edge was an ad.
+	lastOrig, _ := original[len(original)-1].(map[string]any)
+	if lastOrig == nil {
+		return
+	}
+	lastNode, _ := lastOrig["node"].(map[string]any)
+	if lastNode == nil || lastNode["adPayload"] == nil {
+		return // last edge was organic, cursor is fine
+	}
+
+	// Find the last remaining organic edge's groupId.
+	for i := len(filtered) - 1; i >= 0; i-- {
+		em, _ := filtered[i].(map[string]any)
+		if em == nil {
+			continue
+		}
+		node, _ := em["node"].(map[string]any)
+		if node == nil {
+			continue
+		}
+		groupID, _ := node["groupId"].(string)
+		if groupID == "" {
+			continue
+		}
+
+		pageInfo, _ := elements["pageInfo"].(map[string]any)
+		if pageInfo != nil {
+			pageInfo["endCursor"] = base64.StdEncoding.EncodeToString([]byte(groupID))
+		}
+		return
+	}
+}
+
+// filterFeedDetails removes ad posts from the FeedPostDetailsByIds response.
+// Detection: postsInfoByIds[i].__typename == "ProfilePost".
+func (r *redditFilter) filterFeedDetails(body []byte) ([]byte, FilterResult, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, FilterResult{}, nil
+	}
+
+	posts, ok := jsonPath[[]any](doc, "data", "postsInfoByIds")
+	if !ok || len(posts) == 0 {
+		return body, FilterResult{}, nil
+	}
+
+	ct := "application/json"
+	marker := Marker(r.placeholder, r.name, "feed-details-ad", ct)
+	var filtered []any
+	var removed int
+
+	for _, post := range posts {
+		pm, ok := post.(map[string]any)
+		if !ok {
+			filtered = append(filtered, post)
+			continue
+		}
+		if pm["__typename"] == "ProfilePost" {
+			removed++
+			if marker != "" {
+				var ph map[string]any
+				_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
+				filtered = append(filtered, ph)
+			}
+			continue
+		}
+		filtered = append(filtered, post)
+	}
+
+	if removed == 0 {
+		return body, FilterResult{}, nil
+	}
+
+	doc["data"].(map[string]any)["postsInfoByIds"] = filtered //nolint:errcheck // path validated by jsonPath above
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body, FilterResult{}, nil
+	}
+
+	return out, FilterResult{
+		Matched:  true,
+		Modified: true,
+		Rule:     "feed-details-ad",
+		Removed:  removed,
+	}, nil
+}
+
+// filterPdpAds empties the adPosts array in PdpCommentsAds responses.
+// Detection: data.postInfoById.pdpCommentsAds.adPosts is non-empty.
+func (r *redditFilter) filterPdpAds(body []byte) ([]byte, FilterResult, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, FilterResult{}, nil
+	}
+
+	adPosts, ok := jsonPath[[]any](doc, "data", "postInfoById", "pdpCommentsAds", "adPosts")
+	if !ok || len(adPosts) == 0 {
+		return body, FilterResult{}, nil
+	}
+
+	removed := len(adPosts)
+
+	// Empty the array (path existence validated by jsonPath above).
+	data := doc["data"].(map[string]any)              //nolint:errcheck // checked
+	post := data["postInfoById"].(map[string]any)     //nolint:errcheck // checked
+	pdpAds := post["pdpCommentsAds"].(map[string]any) //nolint:errcheck // checked
+	if r.placeholder == PlaceholderNone {
+		pdpAds["adPosts"] = []any{}
+	} else {
+		ct := "application/json"
+		marker := Marker(r.placeholder, r.name, "pdp-comments-ad", ct)
+		var ph map[string]any
+		_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
+		pdpAds["adPosts"] = []any{ph}
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body, FilterResult{}, nil
+	}
+
+	return out, FilterResult{
+		Matched:  true,
+		Modified: true,
+		Rule:     "pdp-comments-ad",
+		Removed:  removed,
+	}, nil
+}
+
+// jsonPath navigates a nested map structure and returns the value at the
+// given key path, type-asserted to T. Returns (zero, false) if any step
+// fails.
+func jsonPath[T any](doc map[string]any, keys ...string) (T, bool) {
+	var zero T
+	current := any(doc)
+	for i, k := range keys {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return zero, false
+		}
+		v, ok := m[k]
+		if !ok {
+			return zero, false
+		}
+		if i == len(keys)-1 {
+			result, ok := v.(T)
+			return result, ok
+		}
+		current = v
+	}
+	return zero, false
 }
 
 // shouldProcess returns true if the URL path matches a pattern that carries ad content.

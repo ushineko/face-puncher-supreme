@@ -1,0 +1,13 @@
+{
+  "data": {
+    "postInfoById": {
+      "__typename": "SubredditPost",
+      "id": "t3_test001",
+      "pdpCommentsAds": {
+        "__typename": "PdpAds",
+        "adPosts": [],
+        "nextCommentsPageAdEligibility": "NOT_ELIGIBLE_AD_LOAD"
+      }
+    }
+  }
+}

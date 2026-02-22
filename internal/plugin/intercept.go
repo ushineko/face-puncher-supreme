@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+func init() {
+	Registry["traffic-capture"] = func() ContentFilter {
+		return NewInterceptionFilter("traffic-capture", "0.1.0", nil)
+	}
+}
+
 // InterceptionFilter captures MITM traffic to disk without modification.
 // It implements ContentFilter with a no-op filter that saves request/response
 // pairs for offline analysis.

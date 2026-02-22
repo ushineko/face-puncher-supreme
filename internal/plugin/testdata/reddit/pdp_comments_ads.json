@@ -1,0 +1,28 @@
+{
+  "data": {
+    "postInfoById": {
+      "__typename": "SubredditPost",
+      "id": "t3_test001",
+      "pdpCommentsAds": {
+        "__typename": "PdpAds",
+        "adPosts": [
+          {
+            "__typename": "AdPost",
+            "id": "t3_ad001",
+            "title": "Promoted ad one",
+            "adEvents": [],
+            "isCreatedFromAdsUi": true
+          },
+          {
+            "__typename": "AdPost",
+            "id": "t3_ad002",
+            "title": "Promoted ad two",
+            "adEvents": [],
+            "isCreatedFromAdsUi": true
+          }
+        ],
+        "nextCommentsPageAdEligibility": "NOT_ELIGIBLE_AD_LOAD"
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "postsInfoByIds": [
+      {
+        "__typename": "SubredditPost",
+        "id": "t3_test001",
+        "title": "Organic post one",
+        "isCreatedFromAdsUi": false
+      },
+      {
+        "__typename": "SubredditPost",
+        "id": "t3_test002",
+        "title": "Organic post two",
+        "isCreatedFromAdsUi": false
+      }
+    ]
+  }
+}

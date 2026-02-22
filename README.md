@@ -569,6 +569,12 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.3.7 — 2026-02-21
+
+- feat: Reddit iOS app ad filtering — strip promoted content from GraphQL API responses (`gql-fed.reddit.com`) used by the Reddit iOS app (spec 017)
+- Filters three GraphQL operations: `HomeFeedSdui` (feed ads), `FeedPostDetailsByIds` (ad post details), `PdpCommentsAds` (post detail page ads)
+- Plugin dispatches by Content-Type: HTML responses use existing Shreddit rules, JSON responses use new GraphQL rules
+
 ### v1.3.6 — 2026-02-21
 
 - feat: add project logo — shown in README, web UI header, login page, About page, and as favicon

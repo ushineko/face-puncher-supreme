@@ -1,0 +1,96 @@
+{
+  "data": {
+    "homeV3": {
+      "__typename": "SDHomeFeed",
+      "elements": {
+        "__typename": "FeedElementConnection",
+        "dist": 8,
+        "pageInfo": {
+          "__typename": "PageInfo",
+          "hasNextPage": true,
+          "endCursor": "dDNfdGVzdDAwNQ=="
+        },
+        "edges": [
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_test001",
+              "groupId": "t3_test001",
+              "adPayload": null,
+              "cells": [
+                {"__typename": "MetadataCell"},
+                {"__typename": "TitleCell"},
+                {"__typename": "ActionCell"}
+              ]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_ad001-uuid-1234",
+              "groupId": "t3_ad001",
+              "adPayload": {
+                "__typename": "AdPayload",
+                "adEvents": [{"type": "IMPRESSION"}],
+                "campaign": {"id": "campaign_001"}
+              },
+              "cells": [
+                {"__typename": "AdMetadataCell"},
+                {"__typename": "TitleCell"},
+                {"__typename": "CallToActionCell"}
+              ]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_test002",
+              "groupId": "t3_test002",
+              "adPayload": null,
+              "cells": [
+                {"__typename": "MetadataCell"},
+                {"__typename": "TitleCell"},
+                {"__typename": "ActionCell"}
+              ]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_ad002-uuid-5678",
+              "groupId": "t3_ad002",
+              "adPayload": {
+                "__typename": "AdPayload",
+                "adEvents": [{"type": "IMPRESSION"}],
+                "campaign": {"id": "campaign_002"}
+              },
+              "cells": [
+                {"__typename": "AdMetadataCell"},
+                {"__typename": "TitleCell"},
+                {"__typename": "CallToActionCell"}
+              ]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_test005",
+              "groupId": "t3_test005",
+              "adPayload": null,
+              "cells": [
+                {"__typename": "MetadataCell"},
+                {"__typename": "TitleCell"},
+                {"__typename": "ActionCell"}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

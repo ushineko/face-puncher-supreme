@@ -1,0 +1,48 @@
+{
+  "data": {
+    "postsInfoByIds": [
+      {
+        "__typename": "SubredditPost",
+        "id": "t3_test001",
+        "title": "Organic post one",
+        "subreddit": {"name": "test_subreddit"},
+        "isCreatedFromAdsUi": false,
+        "score": 1234
+      },
+      {
+        "__typename": "ProfilePost",
+        "id": "t3_ad001",
+        "title": "Promoted post one",
+        "profile": {"name": "advertiser_one"},
+        "isCreatedFromAdsUi": true,
+        "callToAction": "Learn More",
+        "score": null
+      },
+      {
+        "__typename": "SubredditPost",
+        "id": "t3_test002",
+        "title": "Organic post two",
+        "subreddit": {"name": "another_subreddit"},
+        "isCreatedFromAdsUi": false,
+        "score": 567
+      },
+      {
+        "__typename": "ProfilePost",
+        "id": "t3_ad002",
+        "title": "Promoted post two",
+        "profile": {"name": "advertiser_two"},
+        "isCreatedFromAdsUi": true,
+        "callToAction": "Install",
+        "score": null
+      },
+      {
+        "__typename": "SubredditPost",
+        "id": "t3_test003",
+        "title": "Organic post three",
+        "subreddit": {"name": "third_subreddit"},
+        "isCreatedFromAdsUi": false,
+        "score": 89
+      }
+    ]
+  }
+}

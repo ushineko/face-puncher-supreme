@@ -1,0 +1,51 @@
+{
+  "data": {
+    "homeV3": {
+      "__typename": "SDHomeFeed",
+      "elements": {
+        "__typename": "FeedElementConnection",
+        "dist": 8,
+        "pageInfo": {
+          "__typename": "PageInfo",
+          "hasNextPage": true,
+          "endCursor": "dDNfYWQwMDM="
+        },
+        "edges": [
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_test001",
+              "groupId": "t3_test001",
+              "adPayload": null,
+              "cells": [{"__typename": "MetadataCell"}]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_test002",
+              "groupId": "t3_test002",
+              "adPayload": null,
+              "cells": [{"__typename": "MetadataCell"}]
+            }
+          },
+          {
+            "__typename": "FeedElementEdge",
+            "node": {
+              "__typename": "CellGroup",
+              "id": "t3_ad003-uuid-9012",
+              "groupId": "t3_ad003",
+              "adPayload": {
+                "__typename": "AdPayload",
+                "adEvents": [{"type": "IMPRESSION"}]
+              },
+              "cells": [{"__typename": "AdMetadataCell"}]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
