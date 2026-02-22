@@ -37,6 +37,7 @@ No rules relaxed from defaults. All categories kept at strict.
 - **Probe endpoint**: The proxy reserves the `/fps/` URL path prefix for management endpoints. These are never forwarded upstream.
 - **Lint gate**: Always run `make lint` (golangci-lint) after editing Go code. Lint must pass before committing, alongside tests and code quality checks. This is part of every validation pass.
 - **No Co-Authored-By lines**: Never add `Co-Authored-By` trailers anywhere — not in commit messages, changelogs, READMEs, validation reports, specs, or any other file.
+- **Diagrams**: Use Mermaid (`\`\`\`mermaid`) for diagrams in markdown files (specs, docs, READMEs). Do not use custom ASCII art diagrams.
 
 ---
 
@@ -52,6 +53,17 @@ All gates must pass before committing code changes:
 6. **Validation report**: Written to `validation-reports/`
 
 Do not skip lint. If lint fails after editing code, fix the issues before proceeding.
+
+### Spec Issue Tracking
+
+Specs and validation reports are automatically synced to GitHub Issues via `.github/workflows/spec-tracking.yml`:
+
+- **New spec committed** → GitHub issue created with `[spec-NNN]` title and `spec-tracking` label
+- **PASSED validation report committed** → matching spec issue closed automatically
+- A PASSED validation report means the spec is done — no separate "mark complete" step needed for issue closure
+- Matching logic: filename `spec-NNN` > content `**Specs**: NNN` > topic slug overlap > fallback
+- Script logic lives in `scripts/spec-tracking.sh` (not inline YAML)
+- Backfill via `workflow_dispatch` trigger in GitHub Actions UI
 
 ---
 

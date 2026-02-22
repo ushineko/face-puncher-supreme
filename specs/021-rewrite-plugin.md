@@ -30,21 +30,17 @@ the proxy configuration. It needs structured UI for managing rewrite rules.
 
 ### Architecture Overview
 
-```
-                   ┌────────────────────────────┐
-                   │   MITM Response Modifier    │
-                   │                              │
-                   │  domain: www.reddit.com      │
-                   │  ┌──────────────────────┐   │
-request/response──>│  │ reddit-promotions     │   │──> modified body
-                   │  │ (priority: 100)       │   │
-                   │  └──────────┬───────────┘   │
-                   │             │ output         │
-                   │  ┌──────────▼───────────┐   │
-                   │  │ rewrite              │   │
-                   │  │ (priority: 900)       │   │
-                   │  └──────────────────────┘   │
-                   └────────────────────────────┘
+```mermaid
+flowchart LR
+    A["request/response"] --> B
+
+    subgraph B["MITM Response Modifier — domain: www.reddit.com"]
+        direction TB
+        P1["reddit-promotions\n(priority: 100)"]
+        P1 -- "output" --> P2["rewrite\n(priority: 900)"]
+    end
+
+    B --> C["modified body"]
 ```
 
 Two independent changes:
