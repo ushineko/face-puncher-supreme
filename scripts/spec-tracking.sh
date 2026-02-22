@@ -32,8 +32,8 @@ done
 
 # --- Helpers -----------------------------------------------------------------
 
-log() { echo ":: $*"; }
-dry() { echo "[dry-run] would: $*"; }
+log() { echo ":: $*" >&2; }
+dry() { echo "[dry-run] would: $*" >&2; }
 
 # Ensure a label exists, creating it if missing.
 ensure_label() {
