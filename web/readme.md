@@ -1,3 +1,5 @@
+![Face Puncher Supreme](assets/logo.png)
+
 # face-puncher-supreme
 
 Content-aware HTTPS interception proxy for ad blocking. Operates at the HTTP layer to filter ads that DNS-based blockers cannot reach — specifically ads served from the same domain as content (e.g., Reddit promoted posts from `www.reddit.com`).
@@ -12,8 +14,54 @@ Runs as a single Go binary with an embedded React dashboard. Supports both expli
 
 **Tested on**: Chromium, Safari (macOS), iOS/iPadOS (transparent mode), Windows (transparent mode).
 
+## Quick Start (Arch / CachyOS)
+
+The `fpsd-git` package is published to the AUR.
+
+```bash
+# Install with an AUR helper
+yay -S fpsd-git
+
+# Create user directories and copy the example config
+mkdir -p ~/.config/fpsd ~/.local/share/fpsd/logs
+cp /usr/share/doc/fpsd-git/fpsd.yml.example ~/.config/fpsd/fpsd.yml
+
+# Edit the config — set data_dir and optionally add dashboard credentials
+$EDITOR ~/.config/fpsd/fpsd.yml
+
+# Start the service
+systemctl --user enable --now fpsd
+
+# Verify
+fpsd version
+curl -s http://localhost:18737/fps/heartbeat | python3 -m json.tool
+```
+
+Set `data_dir` in the config to `~/.local/share/fpsd` (expand `~` to your home path). The default blocklist URLs in the example config are ready to use. For transparent proxying (no client-side proxy config), see [Transparent Proxying](#transparent-proxying).
+
+## Quick Start (from source)
+
+Requires Go 1.23+ and Node.js (for the dashboard UI build).
+
+```bash
+git clone https://github.com/ushineko/face-puncher-supreme.git
+cd face-puncher-supreme
+make build
+
+# Install as a systemd user service
+./scripts/fps-ctl install
+
+# Verify
+fpsd version
+curl -s http://localhost:18737/fps/heartbeat | python3 -m json.tool
+```
+
+`fps-ctl install` copies the binary, config, and systemd unit to XDG directories and starts the service. Edit `~/.config/fpsd/fpsd.yml` to configure blocklists, dashboard credentials, and MITM domains. See [Configuration](#configuration) for details.
+
 ## Table of Contents
 
+- [Quick Start (Arch / CachyOS)](#quick-start-arch--cachyos)
+- [Quick Start (from source)](#quick-start-from-source)
 - [Build](#build)
 - [Configuration](#configuration)
 - [Run](#run)
@@ -520,6 +568,12 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.3.6 — 2026-02-21
+
+- feat: add project logo — shown in README, web UI header, login page, About page, and as favicon
+- Web UI: favicon.ico + PNG favicons (32/16) + apple-touch-icon (180) for all browsers
+- Web UI: markdown renderer rewrites repo-relative image paths to dashboard assets
 
 ### v1.3.5 — 2026-02-17
 

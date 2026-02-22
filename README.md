@@ -1,3 +1,5 @@
+![Face Puncher Supreme](assets/logo.png)
+
 # face-puncher-supreme
 
 Content-aware HTTPS interception proxy for ad blocking. Operates at the HTTP layer to filter ads that DNS-based blockers cannot reach — specifically ads served from the same domain as content (e.g., Reddit promoted posts from `www.reddit.com`).
@@ -566,6 +568,12 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.3.6 — 2026-02-21
+
+- feat: add project logo — shown in README, web UI header, login page, About page, and as favicon
+- Web UI: favicon.ico + PNG favicons (32/16) + apple-touch-icon (180) for all browsers
+- Web UI: markdown renderer rewrites repo-relative image paths to dashboard assets
 
 ### v1.3.5 — 2026-02-17
 

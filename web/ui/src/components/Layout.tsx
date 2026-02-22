@@ -17,6 +17,7 @@ export default function Layout({ onLogout }: LayoutProps) {
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between bg-vsc-header px-4 py-2 border-b border-vsc-border">
         <div className="flex items-center gap-6">
+          <img src={import.meta.env.BASE_URL + "logo.png"} alt="FPS" className="h-6 w-6" />
           <span className="text-vsc-accent font-bold text-sm">FPS</span>
           <nav className="flex gap-4">
             {navItems.map((item) => (

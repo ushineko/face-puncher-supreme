@@ -29,6 +29,7 @@ export default function Login({ onLogin }: LoginProps) {
         onSubmit={handleSubmit}
         className="bg-vsc-surface border border-vsc-border rounded p-6 w-80"
       >
+        <img src={import.meta.env.BASE_URL + "logo.png"} alt="FPS" className="h-16 w-16 mx-auto mb-3" />
         <h1 className="text-sm text-vsc-accent font-bold mb-4 text-center">
           FPS Dashboard
         </h1>

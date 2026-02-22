@@ -143,6 +143,12 @@ export default function Markdown({ content }: MarkdownProps) {
           em: ({ children }) => (
             <em className="text-vsc-warning italic">{children}</em>
           ),
+          img: ({ src, alt }) => {
+            const resolved = src?.startsWith("assets/")
+              ? import.meta.env.BASE_URL + src.replace("assets/", "")
+              : src;
+            return <img src={resolved} alt={alt ?? ""} className="my-3 max-w-xs" />;
+          },
         }}
       >
         {content}
