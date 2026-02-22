@@ -485,7 +485,8 @@ func TestFilterHomeFeedLastEdgeIsAd(t *testing.T) {
 	assert.Equal(t, "t3_test002", string(decoded))
 }
 
-func TestFilterHomeFeedVisiblePlaceholder(t *testing.T) {
+func TestFilterHomeFeedIgnoresPlaceholderConfig(t *testing.T) {
+	// JSON responses never insert placeholders — the app can't render them.
 	r := newRedditFilter(t, PlaceholderVisible)
 	body := loadFixture(t, "homefeed_sdui.json")
 
@@ -493,19 +494,9 @@ func TestFilterHomeFeedVisiblePlaceholder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, fr.Removed)
 
-	// 3 organic + 2 placeholders = 5 edges.
+	// Only organic edges remain (no placeholders inserted).
 	edges := jsonGet[[]any](t, out, "data", "homeV3", "elements", "edges")
-	assert.Len(t, edges, 5)
-
-	phCount := 0
-	for _, edge := range edges {
-		if em, ok := edge.(map[string]any); ok {
-			if _, has := em["fps_filtered"]; has {
-				phCount++
-			}
-		}
-	}
-	assert.Equal(t, 2, phCount)
+	assert.Len(t, edges, 3)
 }
 
 // --- FeedPostDetailsByIds tests ---
@@ -546,7 +537,7 @@ func TestFilterFeedDetailsNoAds(t *testing.T) {
 	assert.Len(t, posts, 2)
 }
 
-func TestFilterFeedDetailsVisiblePlaceholder(t *testing.T) {
+func TestFilterFeedDetailsIgnoresPlaceholderConfig(t *testing.T) {
 	r := newRedditFilter(t, PlaceholderVisible)
 	body := loadFixture(t, "feed_details.json")
 
@@ -554,9 +545,9 @@ func TestFilterFeedDetailsVisiblePlaceholder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, fr.Removed)
 
-	// 3 organic + 2 placeholders.
+	// Only organic posts remain (no placeholders inserted).
 	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
-	assert.Len(t, posts, 5)
+	assert.Len(t, posts, 3)
 }
 
 // --- PdpCommentsAds tests ---
@@ -588,7 +579,7 @@ func TestFilterPdpAdsEmpty(t *testing.T) {
 	assert.False(t, fr.Modified)
 }
 
-func TestFilterPdpAdsVisiblePlaceholder(t *testing.T) {
+func TestFilterPdpAdsIgnoresPlaceholderConfig(t *testing.T) {
 	r := newRedditFilter(t, PlaceholderVisible)
 	body := loadFixture(t, "pdp_comments_ads.json")
 
@@ -596,11 +587,9 @@ func TestFilterPdpAdsVisiblePlaceholder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, fr.Removed)
 
+	// adPosts emptied regardless of placeholder config.
 	adPosts := jsonGet[[]any](t, out, "data", "postInfoById", "pdpCommentsAds", "adPosts")
-	require.Len(t, adPosts, 1)
-	ph, ok := adPosts[0].(map[string]any)
-	require.True(t, ok, "placeholder should be a map")
-	assert.Contains(t, ph, "fps_filtered")
+	assert.Empty(t, adPosts)
 }
 
 // --- GraphQL dispatch and edge case tests ---
@@ -645,7 +634,7 @@ func TestFilterJSONMissingPath(t *testing.T) {
 	assert.Equal(t, string(body), string(out))
 }
 
-func TestFilterCommentPlaceholderMode(t *testing.T) {
+func TestFilterCommentPlaceholderModeIgnoredForJSON(t *testing.T) {
 	r := newRedditFilter(t, PlaceholderComment)
 	body := loadFixture(t, "feed_details.json")
 
@@ -653,17 +642,9 @@ func TestFilterCommentPlaceholderMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, fr.Removed)
 
-	// Comment mode uses _fps_filtered (underscore prefix).
+	// JSON responses strip ads without placeholders regardless of config.
 	posts := jsonGet[[]any](t, out, "data", "postsInfoByIds")
-	phCount := 0
-	for _, post := range posts {
-		if pm, ok := post.(map[string]any); ok {
-			if _, has := pm["_fps_filtered"]; has {
-				phCount++
-			}
-		}
-	}
-	assert.Equal(t, 2, phCount)
+	assert.Len(t, posts, 3)
 }
 
 func TestFilterHTMLStillWorksAfterJSONDispatch(t *testing.T) {

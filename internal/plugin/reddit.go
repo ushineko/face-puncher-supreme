@@ -155,8 +155,8 @@ func (r *redditFilter) filterHomeFeed(body []byte) ([]byte, FilterResult, error)
 		return body, FilterResult{}, nil
 	}
 
-	ct := "application/json"
-	marker := Marker(r.placeholder, r.name, "feed-sdui-ad", ct)
+	// JSON responses always strip without placeholders — structured API
+	// consumers (the Reddit iOS app) cannot render arbitrary objects.
 	var filtered []any
 	var removed int
 
@@ -173,11 +173,6 @@ func (r *redditFilter) filterHomeFeed(body []byte) ([]byte, FilterResult, error)
 		}
 		if node["adPayload"] != nil {
 			removed++
-			if marker != "" {
-				var ph map[string]any
-				_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
-				filtered = append(filtered, ph)
-			}
 			continue
 		}
 		filtered = append(filtered, edge)
@@ -262,8 +257,6 @@ func (r *redditFilter) filterFeedDetails(body []byte) ([]byte, FilterResult, err
 		return body, FilterResult{}, nil
 	}
 
-	ct := "application/json"
-	marker := Marker(r.placeholder, r.name, "feed-details-ad", ct)
 	var filtered []any
 	var removed int
 
@@ -275,11 +268,6 @@ func (r *redditFilter) filterFeedDetails(body []byte) ([]byte, FilterResult, err
 		}
 		if pm["__typename"] == "ProfilePost" {
 			removed++
-			if marker != "" {
-				var ph map[string]any
-				_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
-				filtered = append(filtered, ph)
-			}
 			continue
 		}
 		filtered = append(filtered, post)
@@ -323,15 +311,7 @@ func (r *redditFilter) filterPdpAds(body []byte) ([]byte, FilterResult, error) {
 	data := doc["data"].(map[string]any)              //nolint:errcheck // checked
 	post := data["postInfoById"].(map[string]any)     //nolint:errcheck // checked
 	pdpAds := post["pdpCommentsAds"].(map[string]any) //nolint:errcheck // checked
-	if r.placeholder == PlaceholderNone {
-		pdpAds["adPosts"] = []any{}
-	} else {
-		ct := "application/json"
-		marker := Marker(r.placeholder, r.name, "pdp-comments-ad", ct)
-		var ph map[string]any
-		_ = json.Unmarshal([]byte(marker), &ph) //nolint:errcheck // marker is known-good JSON from Marker()
-		pdpAds["adPosts"] = []any{ph}
-	}
+	pdpAds["adPosts"] = []any{}
 
 	out, err := json.Marshal(doc)
 	if err != nil {
