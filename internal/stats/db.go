@@ -148,76 +148,59 @@ func (db *DB) Flush() (err error) {
 	db.lastClients = currentClients
 
 	// Flush per-domain block count deltas.
-	currentBlks := make(map[string]int64)
-	for _, dc := range db.collector.SnapshotDomainBlocks() {
-		currentBlks[dc.Domain] = dc.Count
-		prev := db.lastDomainBlks[dc.Domain]
-		delta := dc.Count - prev
-		if delta == 0 {
-			continue
-		}
-		err = sqlitex.Execute(db.conn, `
-			INSERT INTO blocked_domains (domain, count)
-			VALUES (?, ?)
-			ON CONFLICT (domain) DO UPDATE SET
-				count = count + excluded.count
-		`, &sqlitex.ExecOptions{
-			Args: []any{dc.Domain, delta},
-		})
-		if err != nil {
-			return fmt.Errorf("upsert blocked_domains: %w", err)
-		}
+	currentBlks := snapshotToMap(db.collector.SnapshotDomainBlocks())
+	if err := db.flushDomainDeltas("blocked_domains", currentBlks, db.lastDomainBlks); err != nil {
+		return err
 	}
 	db.lastDomainBlks = currentBlks
 
 	// Flush per-domain request count deltas.
-	currentReqs := make(map[string]int64)
-	for _, dc := range db.collector.SnapshotDomainRequests() {
-		currentReqs[dc.Domain] = dc.Count
-		prev := db.lastDomainReqs[dc.Domain]
-		delta := dc.Count - prev
-		if delta == 0 {
-			continue
-		}
-		err = sqlitex.Execute(db.conn, `
-			INSERT INTO domain_requests (domain, count)
-			VALUES (?, ?)
-			ON CONFLICT (domain) DO UPDATE SET
-				count = count + excluded.count
-		`, &sqlitex.ExecOptions{
-			Args: []any{dc.Domain, delta},
-		})
-		if err != nil {
-			return fmt.Errorf("upsert domain_requests: %w", err)
-		}
+	currentReqs := snapshotToMap(db.collector.SnapshotDomainRequests())
+	if err := db.flushDomainDeltas("domain_requests", currentReqs, db.lastDomainReqs); err != nil {
+		return err
 	}
 	db.lastDomainReqs = currentReqs
 
 	// Flush per-domain allow count deltas (if source is configured).
 	if db.allowSnapshotFn != nil {
 		currentAllows := db.allowSnapshotFn()
-		for domain, count := range currentAllows {
-			prev := db.lastDomainAllows[domain]
-			delta := count - prev
-			if delta == 0 {
-				continue
-			}
-			err = sqlitex.Execute(db.conn, `
-				INSERT INTO allowed_domains (domain, count)
-				VALUES (?, ?)
-				ON CONFLICT (domain) DO UPDATE SET
-					count = count + excluded.count
-			`, &sqlitex.ExecOptions{
-				Args: []any{domain, delta},
-			})
-			if err != nil {
-				return fmt.Errorf("upsert allowed_domains: %w", err)
-			}
+		if err := db.flushDomainDeltas("allowed_domains", currentAllows, db.lastDomainAllows); err != nil {
+			return err
 		}
 		db.lastDomainAllows = currentAllows
 	}
 
 	return nil
+}
+
+// flushDomainDeltas upserts delta counts for a single domain-counter table.
+// Table names are hardcoded string literals from callers, not user input.
+func (db *DB) flushDomainDeltas(table string, current, last map[string]int64) error {
+	for domain, count := range current {
+		delta := count - last[domain]
+		if delta == 0 {
+			continue
+		}
+		err := sqlitex.Execute(db.conn, fmt.Sprintf(`
+			INSERT INTO %s (domain, count) VALUES (?, ?)
+			ON CONFLICT (domain) DO UPDATE SET count = count + excluded.count
+		`, table), &sqlitex.ExecOptions{
+			Args: []any{domain, delta},
+		})
+		if err != nil {
+			return fmt.Errorf("upsert %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// snapshotToMap converts a DomainCount slice to a domain->count map.
+func snapshotToMap(counts []DomainCount) map[string]int64 {
+	m := make(map[string]int64, len(counts))
+	for _, dc := range counts {
+		m[dc.Domain] = dc.Count
+	}
+	return m
 }
 
 // TopBlocked returns the top n blocked domains from the database.
