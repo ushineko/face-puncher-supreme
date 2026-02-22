@@ -569,6 +569,12 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.4.0 — 2026-02-22
+
+- feat: peak throughput watermarks — 1-second sampler tracks high-water marks for req/sec and bytes-in/sec, exposed in `/fps/stats` response and dashboard traffic card
+- feat: process resource monitoring — goroutine count, heap/system memory, open/max file descriptors (Linux) in new Resources dashboard card and `/fps/stats` response
+- fix: dashboard text selection — drag-and-drop reorder now initiates from the handle grip only, allowing normal text selection and copy inside card bodies (spec 019)
+
 ### v1.3.8 — 2026-02-22
 
 - refactor: break `runProxy()` god function (334 lines) into 9 named init helpers — function now reads as a table of contents (~55 lines of logic), complexity nolint suppressions removed (spec 018)

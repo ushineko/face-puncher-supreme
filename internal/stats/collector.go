@@ -12,6 +12,7 @@ package stats
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // clientStats holds per-client-IP counters (all atomic for lock-free access).
@@ -48,6 +49,14 @@ type Collector struct {
 	TransparentMITM  atomic.Int64
 	TransparentBlock atomic.Int64
 	SNIMissing       atomic.Int64
+
+	// Peak throughput watermarks (updated by sampler goroutine).
+	peakReqPerSec  atomic.Int64 // millireqs/sec (x1000 for int64 precision)
+	peakBytesInSec atomic.Int64 // bytes/sec
+
+	// Sampler lifecycle.
+	samplerStop chan struct{}
+	samplerDone chan struct{}
 }
 
 // NewCollector creates a new in-memory stats collector.
@@ -275,6 +284,82 @@ func (c *Collector) SnapshotPlugins() []PluginSnapshot {
 type RuleCount struct {
 	Rule  string
 	Count int64
+}
+
+// StartSampler launches a background goroutine that samples request and byte
+// rates once per second, updating peak watermarks via compare-and-swap.
+func (c *Collector) StartSampler() {
+	c.samplerStop = make(chan struct{})
+	c.samplerDone = make(chan struct{})
+	go c.runSampler()
+}
+
+// StopSampler signals the sampler goroutine to stop and waits for it to exit.
+func (c *Collector) StopSampler() {
+	if c.samplerStop != nil {
+		close(c.samplerStop)
+		<-c.samplerDone
+	}
+}
+
+func (c *Collector) runSampler() {
+	defer close(c.samplerDone)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var prevReqs, prevBytes int64
+	var prevTime time.Time
+
+	for {
+		select {
+		case <-c.samplerStop:
+			return
+		case now := <-ticker.C:
+			if prevTime.IsZero() {
+				prevReqs = c.TotalRequests()
+				prevBytes = c.TotalBytesIn()
+				prevTime = now
+				continue
+			}
+			dt := now.Sub(prevTime).Seconds()
+			if dt <= 0 {
+				continue
+			}
+
+			curReqs := c.TotalRequests()
+			curBytes := c.TotalBytesIn()
+
+			reqRate := int64(float64(curReqs-prevReqs) / dt * 1000) // millireqs/sec
+			bytesRate := int64(float64(curBytes-prevBytes) / dt)
+
+			for {
+				old := c.peakReqPerSec.Load()
+				if reqRate <= old || c.peakReqPerSec.CompareAndSwap(old, reqRate) {
+					break
+				}
+			}
+			for {
+				old := c.peakBytesInSec.Load()
+				if bytesRate <= old || c.peakBytesInSec.CompareAndSwap(old, bytesRate) {
+					break
+				}
+			}
+
+			prevReqs = curReqs
+			prevBytes = curBytes
+			prevTime = now
+		}
+	}
+}
+
+// PeakReqPerSec returns the highest observed requests-per-second since startup.
+func (c *Collector) PeakReqPerSec() float64 {
+	return float64(c.peakReqPerSec.Load()) / 1000.0
+}
+
+// PeakBytesInSec returns the highest observed bytes-in-per-second since startup.
+func (c *Collector) PeakBytesInSec() int64 {
+	return c.peakBytesInSec.Load()
 }
 
 // SnapshotPluginRules returns per-rule match counts for a given plugin.

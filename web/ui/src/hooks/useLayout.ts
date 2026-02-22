@@ -9,6 +9,7 @@ const DEFAULT_CARD_ORDER = [
   "blocking",
   "mitm",
   "plugins",
+  "resources",
 ];
 
 const DEFAULT_TABLE_ORDER = [

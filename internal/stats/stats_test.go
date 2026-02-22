@@ -88,6 +88,68 @@ func TestCollector_SnapshotDomainBlocks(t *testing.T) {
 	assert.Equal(t, int64(2), snaps[0].Count)
 }
 
+func TestCollector_Watermarks(t *testing.T) {
+	c := stats.NewCollector()
+	c.StartSampler()
+	defer c.StopSampler()
+
+	// Wait for the sampler to take its first baseline sample.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Generate traffic AFTER the first tick so the next tick sees a delta.
+	for i := 0; i < 100; i++ {
+		c.RecordRequest("10.0.0.1", "example.com", false, 1024, 0)
+	}
+
+	// Wait for the sampler to compute the rate from the delta.
+	time.Sleep(1500 * time.Millisecond)
+
+	assert.Greater(t, c.PeakReqPerSec(), 0.0, "peak req/sec should be > 0 after traffic")
+	assert.Greater(t, c.PeakBytesInSec(), int64(0), "peak bytes-in/sec should be > 0 after traffic")
+}
+
+func TestCollector_WatermarkMonotonic(t *testing.T) {
+	c := stats.NewCollector()
+	c.StartSampler()
+	defer c.StopSampler()
+
+	// Burst of traffic.
+	for i := 0; i < 200; i++ {
+		c.RecordRequest("10.0.0.1", "example.com", false, 2048, 0)
+	}
+
+	// Wait for sampler to capture the burst.
+	time.Sleep(2500 * time.Millisecond)
+
+	peakReq := c.PeakReqPerSec()
+	peakBytes := c.PeakBytesInSec()
+
+	// No more traffic — let sampler record zero-rate ticks.
+	time.Sleep(2500 * time.Millisecond)
+
+	assert.Equal(t, peakReq, c.PeakReqPerSec(), "peak req/sec should not decrease")
+	assert.Equal(t, peakBytes, c.PeakBytesInSec(), "peak bytes-in/sec should not decrease")
+}
+
+func TestCollector_StopSamplerClean(t *testing.T) {
+	c := stats.NewCollector()
+	c.StartSampler()
+
+	// StopSampler should return promptly without blocking.
+	done := make(chan struct{})
+	go func() {
+		c.StopSampler()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatal("StopSampler did not return within 3 seconds")
+	}
+}
+
 func _openTestDB(t *testing.T) (*stats.DB, *stats.Collector) {
 	t.Helper()
 	collector := stats.NewCollector()

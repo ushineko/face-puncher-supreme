@@ -45,6 +45,20 @@ interface PluginFilterEntry {
   top_rules: { rule: string; count: number }[];
 }
 
+interface ResourcesData {
+  mem_alloc_mb: number;
+  mem_sys_mb: number;
+  mem_heap_inuse_mb: number;
+  goroutines: number;
+  open_fds: number;
+  max_fds: number;
+}
+
+interface WatermarksData {
+  peak_req_per_sec: number;
+  peak_bytes_in_sec: number;
+}
+
 interface StatsData {
   connections: { total: number; active: number };
   blocking: {
@@ -74,6 +88,8 @@ interface StatsData {
     total_bytes_in: number;
     total_bytes_out: number;
   };
+  resources: ResourcesData;
+  watermarks: WatermarksData;
 }
 
 function formatUptime(seconds: number): string {
@@ -192,6 +208,10 @@ export default function Stats() {
             />
             <StatRow label="Req/sec" value={reqRate} />
             <StatRow
+              label="Peak Req/sec"
+              value={stats.watermarks.peak_req_per_sec.toFixed(1)}
+            />
+            <StatRow
               label="Blocked"
               value={stats.traffic.total_blocked.toLocaleString()}
             />
@@ -206,6 +226,10 @@ export default function Stats() {
             <StatRow
               label="In/sec"
               value={formatBytes(Number(bytesInRate))}
+            />
+            <StatRow
+              label="Peak In/sec"
+              value={formatBytes(stats.watermarks.peak_bytes_in_sec)}
             />
           </>
         ) : (
@@ -281,6 +305,33 @@ export default function Stats() {
             ))}
           </>
         ) : null,
+      resources: () =>
+        stats ? (
+          <>
+            <StatRow
+              label="Goroutines"
+              value={stats.resources.goroutines.toLocaleString()}
+            />
+            <StatRow
+              label="Heap"
+              value={`${stats.resources.mem_heap_inuse_mb.toFixed(1)} MB`}
+            />
+            <StatRow
+              label="Memory (OS)"
+              value={`${stats.resources.mem_sys_mb.toFixed(1)} MB`}
+            />
+            <StatRow
+              label="Open FDs"
+              value={
+                stats.resources.open_fds === -1
+                  ? "N/A"
+                  : `${stats.resources.open_fds} / ${stats.resources.max_fds === -1 ? "?" : stats.resources.max_fds}`
+              }
+            />
+          </>
+        ) : (
+          <p className="text-xs text-vsc-muted">Waiting...</p>
+        ),
     }),
     [heartbeat, stats, reqRate, bytesInRate],
   );
@@ -292,6 +343,7 @@ export default function Stats() {
     blocking: "Blocking",
     mitm: "MITM Interception",
     plugins: "Plugins",
+    resources: "Resources",
   };
 
   // Charts for stat cards

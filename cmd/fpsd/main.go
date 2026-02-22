@@ -211,6 +211,8 @@ func runProxy(cmd *cobra.Command, _ []string) error {
 	defer blRes.bl.Close() //nolint:errcheck // best-effort on shutdown
 
 	collector := stats.NewCollector()
+	collector.StartSampler()
+	defer collector.StopSampler()
 
 	mr, err := initMITM(&cfg, blRes.bl, logger, collector)
 	if err != nil {

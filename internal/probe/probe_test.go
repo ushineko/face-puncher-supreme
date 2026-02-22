@@ -213,6 +213,47 @@ func TestStatsDisabledHandler(t *testing.T) {
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
+func TestStatsResponseResources(t *testing.T) {
+	collector := stats.NewCollector()
+	info := &_mockServerInfo{startedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sp := &probe.StatsProvider{Info: info, Collector: collector}
+
+	resp := probe.BuildStats(sp, 10, nil)
+
+	assert.Greater(t, resp.Resources.Goroutines, 0, "goroutines should be > 0")
+	assert.Greater(t, resp.Resources.MemSysMB, 0.0, "mem_sys_mb should be > 0")
+	assert.GreaterOrEqual(t, resp.Resources.MemAllocMB, 0.0)
+	assert.GreaterOrEqual(t, resp.Resources.MemHeapInuse, 0.0)
+}
+
+func TestStatsResponseResourcesFDs(t *testing.T) {
+	collector := stats.NewCollector()
+	info := &_mockServerInfo{startedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sp := &probe.StatsProvider{Info: info, Collector: collector}
+
+	resp := probe.BuildStats(sp, 10, nil)
+
+	// On Linux, FDs should be available.
+	// On other platforms, they're -1 (stub).
+	// Either way, the field must be present and non-zero on Linux CI.
+	if resp.Resources.OpenFDs != -1 {
+		assert.Greater(t, resp.Resources.OpenFDs, 0, "open_fds should be > 0 on Linux")
+		assert.Greater(t, resp.Resources.MaxFDs, 0, "max_fds should be > 0 on Linux")
+	}
+}
+
+func TestStatsResponseWatermarks(t *testing.T) {
+	collector := stats.NewCollector()
+	info := &_mockServerInfo{startedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sp := &probe.StatsProvider{Info: info, Collector: collector}
+
+	resp := probe.BuildStats(sp, 10, nil)
+
+	// Without the sampler running, watermarks should be zero.
+	assert.Equal(t, 0.0, resp.Watermarks.PeakReqPerSec)
+	assert.Equal(t, int64(0), resp.Watermarks.PeakBytesInSec)
+}
+
 func TestHeartbeatNoDBQueries(t *testing.T) {
 	// Heartbeat should work with no StatsDB — it only reads atomics.
 	info := &_mockServerInfo{

@@ -1,4 +1,4 @@
-import { DragEvent } from "react";
+import { DragEvent, useRef } from "react";
 
 interface TopTableProps {
   title: string;
@@ -27,12 +27,12 @@ export default function TopTable({
   onToggleChart,
   chart,
 }: TopTableProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
   return (
     <div
+      ref={cardRef}
       className="bg-vsc-surface border border-vsc-border rounded p-4 transition-opacity"
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
@@ -41,6 +41,20 @@ export default function TopTable({
           <span
             className="text-vsc-muted cursor-grab active:cursor-grabbing select-none text-xs leading-none"
             style={{ opacity: undefined }}
+            draggable
+            onDragStart={(e) => {
+              if (cardRef.current) {
+                e.dataTransfer.setDragImage(cardRef.current, 0, 0);
+                requestAnimationFrame(() =>
+                  cardRef.current?.classList.add("opacity-40"),
+                );
+              }
+              onDragStart?.(e as unknown as DragEvent);
+            }}
+            onDragEnd={(e) => {
+              cardRef.current?.classList.remove("opacity-40");
+              onDragEnd?.(e as unknown as DragEvent);
+            }}
             onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
             onMouseLeave={(e) => (e.currentTarget.style.opacity = "")}
           >

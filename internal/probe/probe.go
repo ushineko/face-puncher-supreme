@@ -96,6 +96,8 @@ type StatsResponse struct {
 	Domains     DomainsBlock     `json:"domains"`
 	Clients     ClientsBlock     `json:"clients"`
 	Traffic     TrafficBlock     `json:"traffic"`
+	Resources   ResourcesBlock   `json:"resources"`
+	Watermarks  WatermarksBlock  `json:"watermarks"`
 }
 
 // TransparentBlock holds transparent proxy statistics.
@@ -398,6 +400,11 @@ func BuildStats(sp *StatsProvider, n int, periodSince *time.Time) StatsResponse 
 			TotalBlocked:  totalBlocked,
 			TotalBytesIn:  totalBytesIn,
 			TotalBytesOut: totalBytesOut,
+		},
+		Resources: collectResources(),
+		Watermarks: WatermarksBlock{
+			PeakReqPerSec:  sp.Collector.PeakReqPerSec(),
+			PeakBytesInSec: sp.Collector.PeakBytesInSec(),
 		},
 	}
 }
