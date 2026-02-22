@@ -246,7 +246,7 @@ concurrency:
 - [ ] The `transparent-proxy-installer` validation report closes both spec 010 and spec 011 issues
 - [ ] Spec 016 issue receives comments for both the original and fix validation reports
 - [ ] Spec 014 (no validation report) is closed based on its COMPLETE status
-- [ ] Spec 017 (DRAFT) issue remains open (no PASSED validation, status is not COMPLETE)
+- [ ] Spec 017 issue is closed (has PASSED validation report)
 - [ ] Running the backfill twice produces no duplicate issues (idempotent)
 - [ ] Concurrent workflow runs do not create duplicate issues (concurrency group)
 

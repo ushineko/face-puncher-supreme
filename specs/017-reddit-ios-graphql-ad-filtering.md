@@ -1,6 +1,6 @@
 # Spec 017: Reddit iOS App GraphQL Ad Filtering
 
-**Status**: DRAFT
+**Status**: COMPLETE
 
 ---
 
