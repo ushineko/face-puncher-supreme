@@ -1,6 +1,6 @@
 ## Validation Report: Content Rewrite Plugin (Spec 021)
 **Date**: 2026-02-22 15:05
-**Commit**: pending (pre-commit validation)
+**Commit**: 18fe777
 **Status**: PASSED
 
 ### Phase 3: Tests

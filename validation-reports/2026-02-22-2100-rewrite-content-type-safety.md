@@ -1,6 +1,6 @@
 ## Validation Report: Rewrite Plugin Content-Type Safety
 **Date**: 2026-02-22 21:00
-**Commit**: (pending)
+**Commit**: 5770c94
 **Specs**: 021
 **Status**: PASSED
 
