@@ -18,6 +18,7 @@ const emptyRule: RewriteRuleInput = {
   is_regex: false,
   domains: [],
   url_patterns: [],
+  content_types: [],
   enabled: true,
 };
 
@@ -56,6 +57,7 @@ export default function RewriteRules() {
       is_regex: rule.is_regex,
       domains: rule.domains,
       url_patterns: rule.url_patterns,
+      content_types: rule.content_types,
       enabled: rule.enabled,
     });
     setEditing(rule.id);
@@ -178,6 +180,7 @@ function RuleForm({ form, setForm, onSave, onCancel, saving, isNew }: RuleFormPr
   const [testing, setTesting] = useState(false);
   const [domainsText, setDomainsText] = useState(form.domains.join(", "));
   const [urlPatternsText, setUrlPatternsText] = useState(form.url_patterns.join(", "));
+  const [contentTypesText, setContentTypesText] = useState(form.content_types.join(", "));
 
   async function handleTest() {
     if (!form.pattern || !testSample) return;
@@ -213,6 +216,15 @@ function RuleForm({ form, setForm, onSave, onCancel, saving, isNew }: RuleFormPr
       .map((s) => s.trim())
       .filter(Boolean);
     setForm({ ...form, url_patterns: patterns });
+  }
+
+  function updateContentTypes(text: string) {
+    setContentTypesText(text);
+    const types = text
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setForm({ ...form, content_types: types });
   }
 
   return (
@@ -301,6 +313,19 @@ function RuleForm({ form, setForm, onSave, onCancel, saving, isNew }: RuleFormPr
             />
           </label>
         </div>
+
+        <label className="block">
+          <span className="text-xs text-vsc-muted">
+            Content types (comma-separated, empty = text/html + text/plain only)
+          </span>
+          <input
+            type="text"
+            value={contentTypesText}
+            onChange={(e) => updateContentTypes(e.target.value)}
+            placeholder="text/html, text/plain (default if empty)"
+            className="mt-1 w-full bg-vsc-bg border border-vsc-border rounded px-2 py-1 text-xs text-vsc-fg focus:border-vsc-accent outline-none"
+          />
+        </label>
 
         {/* Test section */}
         <div className="border-t border-vsc-border pt-3 space-y-2">
@@ -454,10 +479,11 @@ function RuleCard({ rule, onEdit, onDelete, onToggle, deleting, isEditing }: Rul
           <span className="text-vsc-error"> (delete)</span>
         )}
       </div>
-      {(rule.domains.length > 0 || rule.url_patterns.length > 0) && (
+      {(rule.domains.length > 0 || rule.url_patterns.length > 0 || rule.content_types.length > 0) && (
         <div className="mt-1 flex gap-3 text-[10px] text-vsc-muted">
           {rule.domains.length > 0 && <span>Domains: {rule.domains.join(", ")}</span>}
           {rule.url_patterns.length > 0 && <span>URLs: {rule.url_patterns.join(", ")}</span>}
+          {rule.content_types.length > 0 && <span>Types: {rule.content_types.join(", ")}</span>}
         </div>
       )}
     </div>

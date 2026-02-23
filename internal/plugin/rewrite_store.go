@@ -37,6 +37,10 @@ func OpenRewriteStore(dataDir string) (*RewriteStore, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+	if err := s.migrateSchema(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 
 	return s, nil
 }
@@ -51,19 +55,48 @@ func (s *RewriteStore) Close() error {
 func (s *RewriteStore) ensureSchema() error {
 	return sqlitex.ExecuteScript(s.conn, `
 		CREATE TABLE IF NOT EXISTS rewrite_rules (
-			id           TEXT PRIMARY KEY,
-			name         TEXT NOT NULL,
-			pattern      TEXT NOT NULL,
-			replacement  TEXT NOT NULL DEFAULT '',
-			is_regex     INTEGER NOT NULL DEFAULT 0,
-			domains      TEXT NOT NULL DEFAULT '[]',
-			url_patterns TEXT NOT NULL DEFAULT '[]',
-			enabled      INTEGER NOT NULL DEFAULT 1,
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
+			id            TEXT PRIMARY KEY,
+			name          TEXT NOT NULL,
+			pattern       TEXT NOT NULL,
+			replacement   TEXT NOT NULL DEFAULT '',
+			is_regex      INTEGER NOT NULL DEFAULT 0,
+			domains       TEXT NOT NULL DEFAULT '[]',
+			url_patterns  TEXT NOT NULL DEFAULT '[]',
+			content_types TEXT NOT NULL DEFAULT '[]',
+			enabled       INTEGER NOT NULL DEFAULT 1,
+			created_at    TEXT NOT NULL,
+			updated_at    TEXT NOT NULL
 		);
 	`, nil)
 }
+
+// migrateSchema adds columns that may be missing from older databases.
+func (s *RewriteStore) migrateSchema() error {
+	var hasContentTypes bool
+	err := sqlitex.Execute(s.conn, "PRAGMA table_info(rewrite_rules)", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			if stmt.ColumnText(1) == "content_types" {
+				hasContentTypes = true
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("check schema: %w", err)
+	}
+	if !hasContentTypes {
+		err = sqlitex.ExecuteTransient(s.conn,
+			"ALTER TABLE rewrite_rules ADD COLUMN content_types TEXT NOT NULL DEFAULT '[]'",
+			nil,
+		)
+		if err != nil {
+			return fmt.Errorf("migrate content_types column: %w", err)
+		}
+	}
+	return nil
+}
+
+const selectColumns = `id, name, pattern, replacement, is_regex, domains, url_patterns, content_types, enabled, created_at, updated_at`
 
 // List returns all rewrite rules ordered by creation time.
 func (s *RewriteStore) List() ([]RewriteRule, error) {
@@ -72,7 +105,7 @@ func (s *RewriteStore) List() ([]RewriteRule, error) {
 
 	var rules []RewriteRule
 	err := sqlitex.Execute(s.conn, `
-		SELECT id, name, pattern, replacement, is_regex, domains, url_patterns, enabled, created_at, updated_at
+		SELECT `+selectColumns+`
 		FROM rewrite_rules ORDER BY created_at ASC
 	`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -101,7 +134,7 @@ func (s *RewriteStore) Get(id string) (RewriteRule, error) {
 	var rule RewriteRule
 	var found bool
 	err := sqlitex.Execute(s.conn, `
-		SELECT id, name, pattern, replacement, is_regex, domains, url_patterns, enabled, created_at, updated_at
+		SELECT `+selectColumns+`
 		FROM rewrite_rules WHERE id = ?
 	`, &sqlitex.ExecOptions{
 		Args: []any{id},
@@ -125,6 +158,7 @@ func (s *RewriteStore) Get(id string) (RewriteRule, error) {
 }
 
 // Add creates a new rule. Validates the pattern and returns the created rule.
+//
 //nolint:gocritic // hugeParam: value copy intentional — we mutate ID/timestamps before returning
 func (s *RewriteStore) Add(rule RewriteRule) (RewriteRule, error) {
 	if err := validateRule(&rule); err != nil {
@@ -136,20 +170,21 @@ func (s *RewriteStore) Add(rule RewriteRule) (RewriteRule, error) {
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
 
-	domainsJSON, _ := json.Marshal(rule.Domains)       //nolint:errcheck // string slice always marshals
-	urlPatternsJSON, _ := json.Marshal(rule.URLPatterns) //nolint:errcheck // string slice always marshals
+	domainsJSON, _ := json.Marshal(rule.Domains)            //nolint:errcheck // string slice always marshals
+	urlPatternsJSON, _ := json.Marshal(rule.URLPatterns)     //nolint:errcheck // string slice always marshals
+	contentTypesJSON, _ := json.Marshal(rule.ContentTypes)   //nolint:errcheck // string slice always marshals
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	err := sqlitex.Execute(s.conn, `
-		INSERT INTO rewrite_rules (id, name, pattern, replacement, is_regex, domains, url_patterns, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rewrite_rules (`+selectColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, &sqlitex.ExecOptions{
 		Args: []any{
 			rule.ID, rule.Name, rule.Pattern, rule.Replacement,
 			boolToInt(rule.IsRegex), string(domainsJSON), string(urlPatternsJSON),
-			boolToInt(rule.Enabled), rule.CreatedAt, rule.UpdatedAt,
+			string(contentTypesJSON), boolToInt(rule.Enabled), rule.CreatedAt, rule.UpdatedAt,
 		},
 	})
 	if err != nil {
@@ -159,6 +194,7 @@ func (s *RewriteStore) Add(rule RewriteRule) (RewriteRule, error) {
 }
 
 // Update replaces a rule's fields. Validates the pattern and returns the updated rule.
+//
 //nolint:gocritic // hugeParam: value copy intentional — we mutate timestamps before returning
 func (s *RewriteStore) Update(id string, rule RewriteRule) (RewriteRule, error) {
 	if err := validateRule(&rule); err != nil {
@@ -166,20 +202,22 @@ func (s *RewriteStore) Update(id string, rule RewriteRule) (RewriteRule, error) 
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	domainsJSON, _ := json.Marshal(rule.Domains)       //nolint:errcheck // string slice always marshals
-	urlPatternsJSON, _ := json.Marshal(rule.URLPatterns) //nolint:errcheck // string slice always marshals
+	domainsJSON, _ := json.Marshal(rule.Domains)            //nolint:errcheck // string slice always marshals
+	urlPatternsJSON, _ := json.Marshal(rule.URLPatterns)     //nolint:errcheck // string slice always marshals
+	contentTypesJSON, _ := json.Marshal(rule.ContentTypes)   //nolint:errcheck // string slice always marshals
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	err := sqlitex.Execute(s.conn, `
-		UPDATE rewrite_rules SET name=?, pattern=?, replacement=?, is_regex=?, domains=?, url_patterns=?, enabled=?, updated_at=?
+		UPDATE rewrite_rules SET name=?, pattern=?, replacement=?, is_regex=?,
+			domains=?, url_patterns=?, content_types=?, enabled=?, updated_at=?
 		WHERE id=?
 	`, &sqlitex.ExecOptions{
 		Args: []any{
 			rule.Name, rule.Pattern, rule.Replacement,
 			boolToInt(rule.IsRegex), string(domainsJSON), string(urlPatternsJSON),
-			boolToInt(rule.Enabled), now, id,
+			string(contentTypesJSON), boolToInt(rule.Enabled), now, id,
 		},
 	})
 	if err != nil {
@@ -232,7 +270,7 @@ func (s *RewriteStore) Toggle(id string) (RewriteRule, error) {
 	// Read back the toggled rule.
 	var rule RewriteRule
 	err = sqlitex.Execute(s.conn, `
-		SELECT id, name, pattern, replacement, is_regex, domains, url_patterns, enabled, created_at, updated_at
+		SELECT `+selectColumns+`
 		FROM rewrite_rules WHERE id = ?
 	`, &sqlitex.ExecOptions{
 		Args: []any{id},
@@ -252,13 +290,17 @@ func (s *RewriteStore) Toggle(id string) (RewriteRule, error) {
 }
 
 // scanRule reads a rule from a query result row.
+// Column order must match selectColumns.
 func scanRule(stmt *sqlite.Stmt) (RewriteRule, error) {
-	var domains, urlPatterns []string
+	var domains, urlPatterns, contentTypes []string
 	if err := json.Unmarshal([]byte(stmt.ColumnText(5)), &domains); err != nil {
 		return RewriteRule{}, fmt.Errorf("parse domains: %w", err)
 	}
 	if err := json.Unmarshal([]byte(stmt.ColumnText(6)), &urlPatterns); err != nil {
 		return RewriteRule{}, fmt.Errorf("parse url_patterns: %w", err)
+	}
+	if err := json.Unmarshal([]byte(stmt.ColumnText(7)), &contentTypes); err != nil {
+		return RewriteRule{}, fmt.Errorf("parse content_types: %w", err)
 	}
 	if domains == nil {
 		domains = []string{}
@@ -266,17 +308,21 @@ func scanRule(stmt *sqlite.Stmt) (RewriteRule, error) {
 	if urlPatterns == nil {
 		urlPatterns = []string{}
 	}
+	if contentTypes == nil {
+		contentTypes = []string{}
+	}
 	return RewriteRule{
-		ID:          stmt.ColumnText(0),
-		Name:        stmt.ColumnText(1),
-		Pattern:     stmt.ColumnText(2),
-		Replacement: stmt.ColumnText(3),
-		IsRegex:     stmt.ColumnInt64(4) != 0,
-		Domains:     domains,
-		URLPatterns: urlPatterns,
-		Enabled:     stmt.ColumnInt64(7) != 0,
-		CreatedAt:   stmt.ColumnText(8),
-		UpdatedAt:   stmt.ColumnText(9),
+		ID:           stmt.ColumnText(0),
+		Name:         stmt.ColumnText(1),
+		Pattern:      stmt.ColumnText(2),
+		Replacement:  stmt.ColumnText(3),
+		IsRegex:      stmt.ColumnInt64(4) != 0,
+		Domains:      domains,
+		URLPatterns:  urlPatterns,
+		ContentTypes: contentTypes,
+		Enabled:      stmt.ColumnInt64(8) != 0,
+		CreatedAt:    stmt.ColumnText(9),
+		UpdatedAt:    stmt.ColumnText(10),
 	}, nil
 }
 

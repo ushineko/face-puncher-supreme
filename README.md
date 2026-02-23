@@ -660,6 +660,7 @@ See [LICENSE](LICENSE) for the full text.
 - feat: plugin chaining — multiple content filters per domain with priority-based execution order
 - feat: rewrite rules dashboard tab — CRUD management, enable/disable toggle, live pattern tester, domain and URL pattern scoping
 - feat: proxy restart from dashboard — Config tab restart button (visible when running under systemd)
+- fix: rewrite plugin now filters by content type and skips script/style blocks — rules default to text/html and text/plain only (prevents JSON API and inline JS corruption); per-rule `content_types` field for explicit opt-in to other types
 
 ### v1.4.1 — 2026-02-22
 

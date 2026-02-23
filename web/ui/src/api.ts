@@ -73,6 +73,7 @@ export interface RewriteRule {
   is_regex: boolean;
   domains: string[];
   url_patterns: string[];
+  content_types: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;

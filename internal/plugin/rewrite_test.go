@@ -357,8 +357,241 @@ func rewriteReq(host, path string) *http.Request {
 }
 
 func rewriteResp() *http.Response {
+	return rewriteRespWithCT("text/html")
+}
+
+func rewriteRespWithCT(ct string) *http.Response {
 	return &http.Response{
 		StatusCode: 200,
-		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Header:     http.Header{"Content-Type": []string{ct}},
 	}
+}
+
+// --- Content-type scoping tests ---
+
+func TestRewriteSkipsJSON(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "literal", Pattern: "foo", Replacement: "bar", Enabled: true,
+	})
+
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("application/json"), []byte(`{"key":"foo"}`))
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"foo"}`, string(body))
+	assert.False(t, result.Matched)
+}
+
+func TestRewriteSkipsJavaScript(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "literal", Pattern: "foo", Replacement: "bar", Enabled: true,
+	})
+
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("application/javascript"), []byte("var x = 'foo';"))
+	require.NoError(t, err)
+	assert.Equal(t, "var x = 'foo';", string(body))
+	assert.False(t, result.Matched)
+}
+
+func TestRewriteSkipsJSONWithCharset(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "literal", Pattern: "foo", Replacement: "bar", Enabled: true,
+	})
+
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("application/json; charset=utf-8"), []byte(`{"key":"foo"}`))
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"foo"}`, string(body))
+	assert.False(t, result.Matched)
+}
+
+func TestRewriteExplicitContentType(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "json-rule", Pattern: "foo", Replacement: "bar",
+		ContentTypes: []string{"application/json"}, Enabled: true,
+	})
+
+	// Should apply to JSON.
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("application/json"), []byte(`{"key":"foo"}`))
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"bar"}`, string(body))
+	assert.True(t, result.Matched)
+
+	// Should NOT apply to HTML (not in the rule's content types).
+	body, result, err = f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte("foo"))
+	require.NoError(t, err)
+	assert.Equal(t, "foo", string(body))
+	assert.False(t, result.Matched)
+}
+
+func TestRewriteHTMLWithCharset(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "literal", Pattern: "foo", Replacement: "bar", Enabled: true,
+	})
+
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("text/html; charset=utf-8"), []byte("<p>foo</p>"))
+	require.NoError(t, err)
+	assert.Equal(t, "<p>bar</p>", string(body))
+	assert.True(t, result.Matched)
+}
+
+// --- HTML-safe replacement tests ---
+
+func TestRewriteHTMLSkipsScript(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "Trump", Replacement: "Chump", Enabled: true,
+	})
+
+	html := `<p>Trump said</p><script>var data = {"name": "Trump"};</script><p>Trump again</p>`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>Chump said</p><script>var data = {"name": "Trump"};</script><p>Chump again</p>`, string(body))
+	assert.True(t, result.Matched)
+	assert.Equal(t, 2, result.Removed)
+}
+
+func TestRewriteHTMLSkipsStyle(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "red", Replacement: "blue", Enabled: true,
+	})
+
+	html := `<p>red text</p><style>.red { color: red; }</style><p>more red</p>`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>blue text</p><style>.red { color: red; }</style><p>more blue</p>`, string(body))
+	assert.True(t, result.Matched)
+	assert.Equal(t, 2, result.Removed)
+}
+
+func TestRewriteHTMLMultipleProtectedBlocks(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "word", Replacement: "WORD", Enabled: true,
+	})
+
+	html := `<p>word</p><script>var word = 1;</script><p>word</p><style>.word{}</style><p>word</p>`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>WORD</p><script>var word = 1;</script><p>WORD</p><style>.word{}</style><p>WORD</p>`, string(body))
+	assert.Equal(t, 3, result.Removed)
+}
+
+func TestRewriteHTMLRegexSkipsScript(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "regex", Pattern: `\bTrump\b`, Replacement: "Chump", IsRegex: true, Enabled: true,
+	})
+
+	html := `<p>Trump here</p><script>{"name":"Trump"}</script><p>Trump there</p>`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>Chump here</p><script>{"name":"Trump"}</script><p>Chump there</p>`, string(body))
+	assert.Equal(t, 2, result.Removed)
+}
+
+func TestRewriteHTMLProtectedRangesRecomputed(t *testing.T) {
+	// First rule replaces text outside scripts (changing body length).
+	// Second rule should still correctly skip scripts after offset shift.
+	f := setupFilter(t,
+		RewriteRule{Name: "r1", Pattern: "short", Replacement: "much-longer-text", Enabled: true},
+		RewriteRule{Name: "r2", Pattern: "secret", Replacement: "REDACTED", Enabled: true},
+	)
+
+	html := `<p>short secret</p><script>var secret = "secret";</script><p>secret</p>`
+	body, _, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>much-longer-text REDACTED</p><script>var secret = "secret";</script><p>REDACTED</p>`, string(body))
+}
+
+func TestRewriteHTMLNoScriptTags(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "foo", Replacement: "bar", Enabled: true,
+	})
+
+	html := `<p>foo</p><div>foo</div>`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>bar</p><div>bar</div>`, string(body))
+	assert.Equal(t, 2, result.Removed)
+}
+
+func TestRewriteHTMLCaseInsensitiveTags(t *testing.T) {
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "word", Replacement: "WORD", Enabled: true,
+	})
+
+	html := `<p>word</p><SCRIPT>var word = 1;</SCRIPT><p>word</p>`
+	body, _, err := f.Filter(rewriteReq("example.com", "/"), rewriteResp(), []byte(html))
+	require.NoError(t, err)
+	assert.Equal(t, `<p>WORD</p><SCRIPT>var word = 1;</SCRIPT><p>WORD</p>`, string(body))
+}
+
+func TestRewritePlainTextNoProtection(t *testing.T) {
+	// text/plain should NOT have script/style protection.
+	f := setupFilter(t, RewriteRule{
+		Name: "replace", Pattern: "word", Replacement: "WORD", Enabled: true,
+	})
+
+	text := `word <script>word</script> word`
+	body, result, err := f.Filter(rewriteReq("example.com", "/"), rewriteRespWithCT("text/plain"), []byte(text))
+	require.NoError(t, err)
+	assert.Equal(t, `WORD <script>WORD</script> WORD`, string(body))
+	assert.Equal(t, 3, result.Removed)
+}
+
+// --- Store content_types tests ---
+
+func TestStoreContentTypes(t *testing.T) {
+	store := openTestStore(t)
+	created, err := store.Add(RewriteRule{
+		Name:         "typed",
+		Pattern:      "x",
+		ContentTypes: []string{"text/html", "application/json"},
+		Enabled:      true,
+	})
+	require.NoError(t, err)
+
+	got, err := store.Get(created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"text/html", "application/json"}, got.ContentTypes)
+}
+
+func TestStoreContentTypesDefaultEmpty(t *testing.T) {
+	store := openTestStore(t)
+	created, err := store.Add(RewriteRule{
+		Name:    "no-types",
+		Pattern: "x",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+
+	got, err := store.Get(created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, got.ContentTypes)
+}
+
+// --- Protected range unit tests ---
+
+func TestFindProtectedRanges(t *testing.T) {
+	body := []byte(`<p>text</p><script>js code</script><p>more</p><style>css</style><p>end</p>`)
+	ranges := findProtectedRanges(body)
+	require.Len(t, ranges, 2)
+	// Verify the script block is captured.
+	assert.Equal(t, "<script>js code</script>", string(body[ranges[0].start:ranges[0].end]))
+	// Verify the style block is captured.
+	assert.Equal(t, "<style>css</style>", string(body[ranges[1].start:ranges[1].end]))
+}
+
+func TestFindProtectedRangesWithAttributes(t *testing.T) {
+	body := []byte(`<script type="text/javascript">code</script>`)
+	ranges := findProtectedRanges(body)
+	require.Len(t, ranges, 1)
+	assert.Equal(t, string(body), string(body[ranges[0].start:ranges[0].end]))
+}
+
+func TestFindProtectedRangesNoTags(t *testing.T) {
+	body := []byte(`<p>hello</p><div>world</div>`)
+	ranges := findProtectedRanges(body)
+	assert.Empty(t, ranges)
+}
+
+func TestFindProtectedRangesDoesNotMatchScripted(t *testing.T) {
+	body := []byte(`<scripted>not a script tag</scripted>`)
+	ranges := findProtectedRanges(body)
+	assert.Empty(t, ranges)
 }
