@@ -654,6 +654,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.5.1 — 2026-02-23
+
+- ui: consolidate dashboard stat cards — merge Server+Resources into one card, merge Connections+Blocking+MITM into "Filtering" card; reduces 7 cards to 4, fits in a single row on wide viewports
+
 ### v1.5.0 — 2026-02-22
 
 - feat: content rewrite plugin — user-defined find/replace rules (literal + regex) applied to MITM'd responses, managed via REST API and dashboard UI

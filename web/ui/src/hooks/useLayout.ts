@@ -4,12 +4,9 @@ const STORAGE_KEY = "fps-dashboard-layout";
 
 const DEFAULT_CARD_ORDER = [
   "server",
-  "connections",
+  "filtering",
   "traffic",
-  "blocking",
-  "mitm",
   "plugins",
-  "resources",
 ];
 
 const DEFAULT_TABLE_ORDER = [

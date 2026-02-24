@@ -178,13 +178,39 @@ export default function Stats() {
               value={`${heartbeat.os}/${heartbeat.arch}`}
             />
             <StatRow label="Go" value={heartbeat.go_version} />
+            {stats && (
+              <div className="mt-2 border-t border-vsc-border pt-2">
+                <div className="text-xs text-vsc-accent mb-1">Resources</div>
+                <StatRow
+                  label="Goroutines"
+                  value={stats.resources.goroutines.toLocaleString()}
+                />
+                <StatRow
+                  label="Heap"
+                  value={`${stats.resources.mem_heap_inuse_mb.toFixed(1)} MB`}
+                />
+                <StatRow
+                  label="Memory (OS)"
+                  value={`${stats.resources.mem_sys_mb.toFixed(1)} MB`}
+                />
+                <StatRow
+                  label="Open FDs"
+                  value={
+                    stats.resources.open_fds === -1
+                      ? "N/A"
+                      : `${stats.resources.open_fds} / ${stats.resources.max_fds === -1 ? "?" : stats.resources.max_fds}`
+                  }
+                />
+              </div>
+            )}
           </>
         ) : (
           <p className="text-xs text-vsc-muted">Waiting...</p>
         ),
-      connections: () =>
+      filtering: () =>
         stats ? (
           <>
+            <div className="text-xs text-vsc-accent mb-1">Connections</div>
             <StatRow
               label="Total"
               value={stats.connections.total.toLocaleString()}
@@ -194,6 +220,42 @@ export default function Stats() {
               label="Active"
               value={stats.connections.active.toLocaleString()}
             />
+            <div className="mt-2 border-t border-vsc-border pt-2">
+              <div className="text-xs text-vsc-accent mb-1">Blocking</div>
+              <StatRow
+                label="Blocked"
+                value={stats.blocking.blocks_total.toLocaleString()}
+              />
+              <StatRow
+                label="Allowed"
+                value={stats.blocking.allows_total.toLocaleString()}
+              />
+              <StatRow
+                label="Blocklist"
+                value={`${stats.blocking.blocklist_size.toLocaleString()} domains`}
+              />
+              <StatRow
+                label="Allowlist"
+                value={`${stats.blocking.allowlist_size.toLocaleString()} entries`}
+              />
+              <StatRow
+                label="Sources"
+                value={stats.blocking.blocklist_sources.toString()}
+              />
+            </div>
+            {stats.mitm.enabled && (
+              <div className="mt-2 border-t border-vsc-border pt-2">
+                <div className="text-xs text-vsc-accent mb-1">MITM</div>
+                <StatRow
+                  label="Intercepts"
+                  value={stats.mitm.intercepts_total.toLocaleString()}
+                />
+                <StatRow
+                  label="Domains"
+                  value={stats.mitm.domains_configured.toString()}
+                />
+              </div>
+            )}
           </>
         ) : (
           <p className="text-xs text-vsc-muted">Waiting...</p>
@@ -235,48 +297,6 @@ export default function Stats() {
         ) : (
           <p className="text-xs text-vsc-muted">Waiting...</p>
         ),
-      blocking: () =>
-        stats ? (
-          <>
-            <StatRow
-              label="Blocked"
-              value={stats.blocking.blocks_total.toLocaleString()}
-              accent
-            />
-            <StatRow
-              label="Allowed"
-              value={stats.blocking.allows_total.toLocaleString()}
-            />
-            <StatRow
-              label="Blocklist"
-              value={`${stats.blocking.blocklist_size.toLocaleString()} domains`}
-            />
-            <StatRow
-              label="Allowlist"
-              value={`${stats.blocking.allowlist_size.toLocaleString()} entries`}
-            />
-            <StatRow
-              label="Sources"
-              value={stats.blocking.blocklist_sources.toString()}
-            />
-          </>
-        ) : (
-          <p className="text-xs text-vsc-muted">Waiting...</p>
-        ),
-      mitm: () =>
-        stats?.mitm.enabled ? (
-          <>
-            <StatRow
-              label="Intercepts"
-              value={stats.mitm.intercepts_total.toLocaleString()}
-              accent
-            />
-            <StatRow
-              label="Domains"
-              value={stats.mitm.domains_configured.toString()}
-            />
-          </>
-        ) : null,
       plugins: () =>
         stats && stats.plugins.active > 0 ? (
           <>
@@ -305,45 +325,15 @@ export default function Stats() {
             ))}
           </>
         ) : null,
-      resources: () =>
-        stats ? (
-          <>
-            <StatRow
-              label="Goroutines"
-              value={stats.resources.goroutines.toLocaleString()}
-            />
-            <StatRow
-              label="Heap"
-              value={`${stats.resources.mem_heap_inuse_mb.toFixed(1)} MB`}
-            />
-            <StatRow
-              label="Memory (OS)"
-              value={`${stats.resources.mem_sys_mb.toFixed(1)} MB`}
-            />
-            <StatRow
-              label="Open FDs"
-              value={
-                stats.resources.open_fds === -1
-                  ? "N/A"
-                  : `${stats.resources.open_fds} / ${stats.resources.max_fds === -1 ? "?" : stats.resources.max_fds}`
-              }
-            />
-          </>
-        ) : (
-          <p className="text-xs text-vsc-muted">Waiting...</p>
-        ),
     }),
     [heartbeat, stats, reqRate, bytesInRate],
   );
 
   const cardTitles: Record<string, string> = {
     server: "Server",
-    connections: "Connections",
+    filtering: "Filtering",
     traffic: "Traffic",
-    blocking: "Blocking",
-    mitm: "MITM Interception",
     plugins: "Plugins",
-    resources: "Resources",
   };
 
   // Charts for stat cards
@@ -358,7 +348,6 @@ export default function Stats() {
 
   // Determine which cards are available (have content to show)
   const availableCards = Object.keys(cardRenderers).filter((id) => {
-    if (id === "mitm") return stats?.mitm.enabled;
     if (id === "plugins") return stats && stats.plugins.active > 0;
     return true;
   });
