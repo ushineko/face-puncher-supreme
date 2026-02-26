@@ -1,6 +1,6 @@
 # Spec 022: Dashboard Card Consolidation
 
-**Status**: DRAFT
+**Status**: COMPLETE
 **Created**: 2026-02-23
 **Depends on**: Spec 009 (web dashboard), Spec 019 (stats watermarks & resources)
 
