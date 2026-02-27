@@ -389,7 +389,10 @@ do_push() {
     log "Changed files:"
     while IFS= read -r f; do echo "  $f"; done <<< "$changed_files"
 
-    # Process changed specs
+    # Process changed specs — track created/updated issue numbers for
+    # the validation-report phase (avoids race with find_spec_issue).
+    declare -A push_issue_map  # spec_num -> issue_num
+
     local changed_specs
     changed_specs=$(echo "$changed_files" | grep "^${SPEC_DIR}/" || true)
     for spec_file in $changed_specs; do
@@ -400,9 +403,45 @@ do_push() {
         local existing
         existing=$(find_spec_issue "$SPEC_NUM")
         if [[ -z "$existing" ]]; then
-            create_spec_issue "$spec_file" "false"
+            local new_issue
+            new_issue=$(create_spec_issue "$spec_file" "false")
+            [[ -n "$new_issue" ]] && push_issue_map[$SPEC_NUM]="$new_issue"
         else
             update_spec_issue "$existing" "$spec_file" "false"
+            push_issue_map[$SPEC_NUM]="$existing"
+
+            # Bug fix: close issue if spec is now COMPLETE and issue is open.
+            # Without this, marking a spec COMPLETE in a push that doesn't
+            # also include a validation report would leave the issue open.
+            if [[ "$SPEC_STATUS" == "COMPLETE" ]]; then
+                local state
+                state=$(gh issue view "$existing" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")
+                if [[ "$state" == "OPEN" ]]; then
+                    # Look for an existing PASSED validation report for this spec
+                    local found_val=""
+                    for vf in "$VALIDATION_DIR"/*.md; do
+                        [[ -f "$vf" ]] || continue
+                        local vf_specs
+                        vf_specs=$(match_validation_to_specs "$vf")
+                        for vs in $vf_specs; do
+                            vs=$(echo "$vs" | tr -d '[:space:]')
+                            if [[ "$vs" == "$SPEC_NUM" ]]; then
+                                eval "$(parse_validation "$vf")"
+                                if [[ "$VAL_STATUS" == "PASSED" ]]; then
+                                    found_val="$vf"
+                                    break 2
+                                fi
+                            fi
+                        done
+                    done
+
+                    if [[ -n "$found_val" ]]; then
+                        close_spec_issue "$existing" "$found_val"
+                    else
+                        close_spec_issue_by_status "$existing" "$spec_file"
+                    fi
+                fi
+            fi
         fi
     done
 
@@ -424,8 +463,14 @@ do_push() {
             spec_num=$(echo "$spec_num" | tr -d '[:space:]')
             [[ -n "$spec_num" ]] || continue
 
+            # Look up issue: try the push_issue_map first (handles race
+            # when spec + validation report are in the same push), then
+            # fall back to searching existing issues.
             local issue_num
-            issue_num=$(find_spec_issue "$spec_num")
+            issue_num="${push_issue_map[$spec_num]:-}"
+            if [[ -z "$issue_num" ]]; then
+                issue_num=$(find_spec_issue "$spec_num")
+            fi
             if [[ -z "$issue_num" ]]; then
                 log "No issue found for spec ${spec_num} — skipping validation linkage"
                 continue
