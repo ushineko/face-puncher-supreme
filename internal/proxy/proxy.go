@@ -19,6 +19,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ushineko/face-puncher-supreme/internal/netutil"
+	"github.com/ushineko/face-puncher-supreme/internal/relay"
 )
 
 // Blocker checks whether a domain should be blocked.
@@ -324,11 +327,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	destConn, err := net.DialTimeout("tcp", r.Host, s.connectTimeout)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel error: %v", err), http.StatusBadGateway)
-		s.logger.Error("connect tunnel failed",
-			"host", r.Host,
-			"error", err,
-			"duration_ms", time.Since(start).Milliseconds(),
-		)
+		if netutil.IsUnspecifiedDialError(err) {
+			s.logger.Debug("connect upstream resolves to unspecified address (DNS-blocked); dropping",
+				"host", r.Host,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		} else {
+			s.logger.Error("connect tunnel failed",
+				"host", r.Host,
+				"error", err,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		}
 		return
 	}
 
@@ -360,32 +370,23 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		"remote", r.RemoteAddr,
 	)
 
-	// Bidirectional copy — always track bytes for stats.
-	var uploadBytes, downloadBytes atomic.Int64
+	// Bidirectional copy — always track bytes for stats. Runs in a goroutine
+	// so the (hijacked) handler returns immediately; the tunnel lives until
+	// both directions close.
 	go func() {
 		defer func() { _ = destConn.Close() }()
 		defer func() { _ = clientConn.Close() }()
-		n, _ := io.Copy(destConn, clientConn) //nolint:errcheck // tunnel streaming
-		uploadBytes.Store(n)
-	}()
-	go func() {
-		defer func() { _ = destConn.Close() }()
-		defer func() { _ = clientConn.Close() }()
-		n, _ := io.Copy(clientConn, destConn) //nolint:errcheck // tunnel streaming
-		downloadBytes.Store(n)
 
-		up := uploadBytes.Load()
-		down := downloadBytes.Load()
+		up, down := relay.Bidirectional(clientConn, destConn)
 
 		// Record tunnel byte counts.
 		if s.onTunnelClose != nil {
 			s.onTunnelClose(clientIP, up, down)
 		}
 
-		duration := time.Since(start)
 		s.logger.Debug("connect closed",
 			"host", r.Host,
-			"duration_ms", duration.Milliseconds(),
+			"duration_ms", time.Since(start).Milliseconds(),
 			"upload_bytes", up,
 			"download_bytes", down,
 		)

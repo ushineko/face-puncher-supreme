@@ -5,14 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/ushineko/face-puncher-supreme/internal/netutil"
+	"github.com/ushineko/face-puncher-supreme/internal/relay"
 )
 
 // Blocker checks whether a domain should be blocked.
@@ -174,6 +175,13 @@ func (l *Listener) handleHTTP(conn net.Conn) {
 		return
 	}
 
+	// CONNECT tunnels (e.g. clients using an upstream HTTP proxy) cannot be
+	// forwarded as ordinary requests — establish a raw tunnel instead.
+	if req.Method == http.MethodConnect {
+		l.handleConnect(conn, req, clientIP)
+		return
+	}
+
 	// Determine destination from Host header.
 	host := req.Host
 	if host == "" {
@@ -216,8 +224,13 @@ func (l *Listener) handleHTTP(conn net.Conn) {
 	upConn, err := net.DialTimeout("tcp", upstream, l.cfg.ConnectTimeout)
 	if err != nil {
 		writeHTTPError(conn, http.StatusBadGateway, "upstream connection failed")
-		l.logger.Error("transparent http dial failed",
-			"domain", domain, "upstream", upstream, "remote", clientIP, "error", err)
+		if netutil.IsUnspecifiedDialError(err) {
+			l.logger.Debug("transparent http upstream resolves to unspecified address (DNS-blocked); dropping",
+				"domain", domain, "upstream", upstream, "remote", clientIP)
+		} else {
+			l.logger.Error("transparent http dial failed",
+				"domain", domain, "upstream", upstream, "remote", clientIP, "error", err)
+		}
 		return
 	}
 	defer upConn.Close() //nolint:errcheck // best-effort close
@@ -267,6 +280,72 @@ func (l *Listener) handleHTTP(conn net.Conn) {
 		"status", resp.StatusCode,
 		"remote", clientIP,
 	)
+}
+
+// handleConnect establishes a raw TCP tunnel for a transparently-intercepted
+// CONNECT request. It mirrors the explicit proxy's CONNECT handling: dial the
+// requested authority, reply 200, and relay bytes bidirectionally.
+func (l *Listener) handleConnect(conn net.Conn, req *http.Request, clientIP string) {
+	host := req.Host
+	if !strings.Contains(host, ":") {
+		host += ":443"
+	}
+	domain := stripPort(host)
+
+	// Blocklist check.
+	if l.cfg.Blocker != nil && l.cfg.Blocker.IsBlocked(domain) {
+		writeHTTPError(conn, http.StatusForbidden, "blocked by proxy")
+		l.logger.Info("transparent blocked", "domain", domain, "remote", clientIP, "proto", "connect")
+		if l.cfg.OnRequest != nil {
+			l.cfg.OnRequest(clientIP, domain, true, 0, 0)
+		}
+		if l.cfg.OnTransparentBlock != nil {
+			l.cfg.OnTransparentBlock()
+		}
+		return
+	}
+
+	// Dial upstream.
+	upConn, err := net.DialTimeout("tcp", host, l.cfg.ConnectTimeout)
+	if err != nil {
+		writeHTTPError(conn, http.StatusBadGateway, "upstream connection failed")
+		if netutil.IsUnspecifiedDialError(err) {
+			l.logger.Debug("transparent connect upstream resolves to unspecified address (DNS-blocked); dropping",
+				"domain", domain, "upstream", host, "remote", clientIP)
+		} else {
+			l.logger.Error("transparent connect dial failed",
+				"domain", domain, "upstream", host, "remote", clientIP, "error", err)
+		}
+		return
+	}
+	defer upConn.Close() //nolint:errcheck // best-effort close
+
+	// Tell the client the tunnel is established.
+	if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		l.logger.Debug("transparent connect reply write failed",
+			"domain", domain, "remote", clientIP, "error", err)
+		return
+	}
+
+	if l.cfg.OnRequest != nil {
+		l.cfg.OnRequest(clientIP, domain, false, 0, 0)
+	}
+
+	l.logger.Info("transparent connect", "domain", domain, "remote", clientIP)
+
+	uploadBytes, downloadBytes := relay.Bidirectional(conn, upConn)
+
+	if l.cfg.OnTunnelClose != nil {
+		l.cfg.OnTunnelClose(clientIP, uploadBytes, downloadBytes)
+	}
+
+	if l.verbose {
+		l.logger.Debug("transparent connect closed",
+			"domain", domain,
+			"upload_bytes", uploadBytes,
+			"download_bytes", downloadBytes,
+		)
+	}
 }
 
 // handleHTTPS handles a transparent HTTPS connection.
@@ -347,8 +426,13 @@ func (l *Listener) handleHTTPS(conn net.Conn) {
 
 	upConn, err := net.DialTimeout("tcp", upstreamHost, l.cfg.ConnectTimeout)
 	if err != nil {
-		l.logger.Error("transparent tunnel dial failed",
-			"domain", domain, "upstream", upstreamHost, "remote", clientIP, "error", err)
+		if netutil.IsUnspecifiedDialError(err) {
+			l.logger.Debug("transparent tunnel upstream resolves to unspecified address (DNS-blocked); dropping",
+				"domain", domain, "upstream", upstreamHost, "remote", clientIP)
+		} else {
+			l.logger.Error("transparent tunnel dial failed",
+				"domain", domain, "upstream", upstreamHost, "remote", clientIP, "error", err)
+		}
 		return
 	}
 	defer upConn.Close() //nolint:errcheck // best-effort close
@@ -366,41 +450,17 @@ func (l *Listener) handleHTTPS(conn net.Conn) {
 
 	l.logger.Info("transparent tunnel", "domain", domain, "remote", clientIP)
 
-	// Bidirectional byte copy.
-	var uploadBytes, downloadBytes atomic.Int64
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		n, _ := io.Copy(upConn, conn) //nolint:errcheck // tunnel streaming
-		uploadBytes.Store(n)
-		// Signal upstream we're done sending.
-		if tc, ok := upConn.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		n, _ := io.Copy(conn, upConn) //nolint:errcheck // tunnel streaming
-		downloadBytes.Store(n)
-		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-	}()
-
-	wg.Wait()
+	uploadBytes, downloadBytes := relay.Bidirectional(conn, upConn)
 
 	if l.cfg.OnTunnelClose != nil {
-		l.cfg.OnTunnelClose(clientIP, uploadBytes.Load(), downloadBytes.Load())
+		l.cfg.OnTunnelClose(clientIP, uploadBytes, downloadBytes)
 	}
 
 	if l.verbose {
 		l.logger.Debug("transparent tunnel closed",
 			"domain", domain,
-			"upload_bytes", uploadBytes.Load(),
-			"download_bytes", downloadBytes.Load(),
+			"upload_bytes", uploadBytes,
+			"download_bytes", downloadBytes,
 		)
 	}
 }

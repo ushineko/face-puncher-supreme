@@ -654,6 +654,12 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.5.2 — 2026-05-30
+
+- fix: transparent listener now handles HTTP CONNECT tunnels — CONNECT requests redirected to the transparent HTTP port (e.g. Apple Safe Browsing reaching `proxy-safebrowsing.googleapis.com`) were previously mishandled as plain requests and failed with "unexpected EOF"; they now establish a proper tunnel, gated by the blocklist
+- fix: dials to DNS-blocked unspecified addresses (`0.0.0.0` / `::`) are logged at DEBUG instead of ERROR, removing recurring log noise from resolver-blocked domains
+- refactor: extract `internal/relay.Bidirectional` shared tunnel-relay helper, adopted by the explicit proxy and both transparent tunnel paths
+
 ### v1.5.1 — 2026-02-23
 
 - ui: consolidate dashboard stat cards — merge Server+Resources into one card, merge Connections+Blocking+MITM into "Filtering" card; reduces 7 cards to 4, fits in a single row on wide viewports
