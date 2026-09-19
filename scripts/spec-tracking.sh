@@ -73,14 +73,19 @@ parse_spec() {
 
     # Extract bold front matter fields from the first 10 lines
     while IFS= read -r line; do
+        # Two spellings, because the repositories grew two. This one's specs
+        # carry bold front matter; clockwork-orange's and fynedesygn's put the
+        # status in a heading. Neither is worth rewriting history over.
         if [[ "$line" =~ ^\*\*Status\*\*:\ (.+)$ ]]; then
+            status="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^##\ Status:\ (.+)$ ]]; then
             status="${BASH_REMATCH[1]}"
         elif [[ "$line" =~ ^\*\*Created\*\*:\ ([0-9]{4}-[0-9]{2}-[0-9]{2})$ ]]; then
             created="${BASH_REMATCH[1]}"
         elif [[ "$line" =~ ^\*\*Depends\ on\*\*:\ (.+)$ ]]; then
             deps="${BASH_REMATCH[1]}"
         fi
-    done < <(head -10 "$file")
+    done < <(head -20 "$file")
 
     # If no Created date in front matter, try git log for first commit
     if [[ -z "$created" ]]; then
@@ -111,7 +116,13 @@ parse_validation() {
             date="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
         elif [[ "$line" =~ ^\*\*Date\*\*:\ ([0-9]{4}-[0-9]{2}-[0-9]{2})$ ]]; then
             date="${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^\*\*Status\*\*:\ (PASSED|FAILED)$ ]]; then
+        elif [[ "$line" =~ ^Date:\ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then
+            date="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^\*\*Status\*\*:\ (PASSED|FAILED)([^A-Za-z].*)?$ ]]; then
+            # A qualifier may follow the verdict -- "PASSED (AC9 remains for the
+            # author)", "PASSED locally; CI verifies on the tag" -- and the
+            # verdict is still the verdict. Anchored on a non-letter so
+            # "PASSEDISH" is not read as a pass.
             status="${BASH_REMATCH[1]}"
         fi
     done < <(head -10 "$file")
@@ -175,8 +186,10 @@ match_validation_to_specs() {
     local val_filename
     val_filename=$(basename "$val_file")
 
-    # Priority 1: Explicit spec number in validation filename
-    if [[ "$val_filename" =~ spec-([0-9]{3}) ]]; then
+    # Priority 1: Explicit spec number in validation filename. The hyphen is
+    # optional: this repository writes "spec-024", clockwork-orange and
+    # fynedesygn write "spec014", and both name the same thing.
+    if [[ "$val_filename" =~ spec-?([0-9]{3}) ]]; then
         echo "${BASH_REMATCH[1]}"
         return
     fi
