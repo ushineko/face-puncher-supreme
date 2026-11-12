@@ -166,7 +166,7 @@ func (s *DashboardServer) spaHandler() http.Handler {
 			fi, statErr := f.Stat()
 			_ = f.Close()
 			if statErr == nil && !fi.IsDir() {
-				http.ServeFileFS(w, r, fsys, path)
+				http.ServeFileFS(w, r, fsys, path) //nolint:gosec // G703: fsys is the embedded UI; fs.FS rejects ".." paths
 				return
 			}
 		}

@@ -621,7 +621,7 @@ Integration tests are skipped with `-short` (which `make test` uses via `-race -
 make lint
 ```
 
-Uses golangci-lint v2 with a versioned binary (auto-installed on first run). Configuration is in `.golangci.yml`. Enabled linters: errcheck, gocognit, gocritic, gocyclo, govet, lll, unparam, unused, cyclop, gosec.
+Uses golangci-lint v2.12.2, downloaded on first run from the GitHub release and verified against a pinned checksum. The linter runs under Go 1.26.0 (`LINT_GO_TOOLCHAIN`), the Go it was built with, so it works on machines with a newer system Go; `GOTOOLCHAIN` fetches that toolchain if needed. Configuration is in `config/.golangci-v2.12.2.yml`; the cache is per checkout in `.cache/`. Enabled linters: errcheck, gocognit, gocritic, gocyclo, govet, lll, unparam, unused, cyclop, gosec.
 
 ## Project Structure
 

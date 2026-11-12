@@ -21,16 +21,16 @@ func buildClientHello(sni string) []byte {
 		nameBytes := []byte(sni)
 		// server_name_list: type(1) + length(2) + name
 		entry := []byte{0x00}                                                // host_name type
-		entry = append(entry, byte(len(nameBytes)>>8), byte(len(nameBytes))) // name length
+		entry = append(entry, byte(len(nameBytes)>>8), byte(len(nameBytes))) //nolint:gosec // G115: test hello, lengths < 64 KiB
 		entry = append(entry, nameBytes...)
 
 		listLen := len(entry)
-		sniData := []byte{byte(listLen >> 8), byte(listLen)} // list length
+		sniData := []byte{byte(listLen >> 8), byte(listLen)} //nolint:gosec // G115: test hello, lengths < 64 KiB
 		sniData = append(sniData, entry...)
 
 		// Extension header: type(2) + length(2) + data
 		sniExt = []byte{0x00, 0x00} // server_name extension type
-		sniExt = append(sniExt, byte(len(sniData)>>8), byte(len(sniData)))
+		sniExt = append(sniExt, byte(len(sniData)>>8), byte(len(sniData))) //nolint:gosec // G115: test hello, lengths < 64 KiB
 		sniExt = append(sniExt, sniData...)
 	}
 
@@ -57,12 +57,12 @@ func buildClientHello(sni string) []byte {
 
 	// Handshake message: type(1) + length(3) + body
 	helloLen := len(hello)
-	handshake := []byte{0x01, byte(helloLen >> 16), byte(helloLen >> 8), byte(helloLen)} // ClientHello
+	handshake := []byte{0x01, byte(helloLen >> 16), byte(helloLen >> 8), byte(helloLen)} //nolint:gosec // G115: test hello, ClientHello
 	handshake = append(handshake, hello...)
 
 	// TLS record: type(1) + version(2) + length(2) + payload
 	payloadLen := len(handshake)
-	record := []byte{0x16, 0x03, 0x01, byte(payloadLen >> 8), byte(payloadLen)} // Handshake, TLS 1.0
+	record := []byte{0x16, 0x03, 0x01, byte(payloadLen >> 8), byte(payloadLen)} //nolint:gosec // G115: test hello, TLS 1.0 record
 	record = append(record, handshake...)
 
 	return record

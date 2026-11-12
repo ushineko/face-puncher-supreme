@@ -306,7 +306,7 @@ func (l *Listener) handleConnect(conn net.Conn, req *http.Request, clientIP stri
 	}
 
 	// Dial upstream.
-	upConn, err := net.DialTimeout("tcp", host, l.cfg.ConnectTimeout)
+	upConn, err := net.DialTimeout("tcp", host, l.cfg.ConnectTimeout) //nolint:gosec // G704: forwarding to the client's destination is the proxy's job
 	if err != nil {
 		writeHTTPError(conn, http.StatusBadGateway, "upstream connection failed")
 		if netutil.IsUnspecifiedDialError(err) {

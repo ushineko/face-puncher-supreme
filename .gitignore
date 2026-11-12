@@ -2,6 +2,9 @@
 /fpsd
 coverage.out
 coverage.html
+
+# Per-checkout linter cache (see Makefile lint target)
+/.cache/
 logs/
 stats.db
 blocklist.db

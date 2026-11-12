@@ -74,6 +74,7 @@ func (s *sessionStore) revoke(token string) {
 
 // setSessionCookie writes the session cookie to the response.
 func setSessionCookie(w http.ResponseWriter, token string) {
+	//nolint:gosec // G124: the dashboard is served over plain HTTP on the LAN; Secure would drop the cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
@@ -86,6 +87,7 @@ func setSessionCookie(w http.ResponseWriter, token string) {
 
 // clearSessionCookie expires the session cookie.
 func clearSessionCookie(w http.ResponseWriter) {
+	//nolint:gosec // G124: plain-HTTP dashboard, see setSessionCookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",

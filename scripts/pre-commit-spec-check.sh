@@ -37,7 +37,7 @@ extract_spec_number() {
 find_spec_file() {
     local num="$1"
     local padded
-    padded=$(printf "%03d" "$num")
+    padded=$(printf "%03d" "$((10#$num))") # base 10: "027" is not octal
     local match
     match=$(find "$SPEC_DIR" -maxdepth 1 -name "${padded}-*.md" -print -quit 2>/dev/null)
     echo "$match"
@@ -73,7 +73,7 @@ while IFS= read -r file; do
     [[ -n "$spec_file" ]] || continue
 
     if is_draft "$spec_file"; then
-        padded=$(printf "%03d" "$spec_num")
+        padded=$(printf "%03d" "$((10#$spec_num))")
         errors+=("  $file → spec $padded is still DRAFT ($spec_file)")
     fi
 done < <(git diff --cached --name-only --diff-filter=AM)
