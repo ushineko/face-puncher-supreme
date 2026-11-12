@@ -1,6 +1,6 @@
 # Spec 027: Lint and Go Toolchain Standardization
 
-**Status**: INCOMPLETE
+**Status**: COMPLETE
 **Created**: 2026-11-12
 **Depends on**: none
 
@@ -34,7 +34,7 @@ The other Go projects in this workspace (hayami, nmsbonker, fynstall and others)
 - [x] Every new linter finding is resolved; suppressions carry the rule ID and a reason.
 - [x] `make test` and `go vet ./...` pass.
 - [x] The pre-commit spec check maps a report for spec 027 to `specs/027-*` (not 023) and accepts `008`/`009`.
-- [ ] CI's `make lint` step passes on main and in the release workflow.
+- [x] CI's `make lint` step passes on main and in the release workflow. (CI run 43257772609 on 3f07d61 and Release run 43258523239 on v1.5.3: `go version go1.26.0`, `0 issues`.)
 
 ## Findings Triage
 
@@ -59,9 +59,15 @@ The other Go projects in this workspace (hayami, nmsbonker, fynstall and others)
 | 1 | njv-cachyos, Go 1.27.3 | `make lint` in a fresh worktree | Installs v2.12.2 with checksum checks, prints `go1.26.0`, `0 issues` | 1, 2, 5 |
 | 2 | GitHub Actions, release tag | CI and release workflows | `make lint` step green | 7 |
 
+Results 2026-11-12: step 1 PASS (scratch-GOPATH install verified both checksums; a wrong pin fails), step 2 PASS (both workflows green).
+
 ### Prod visibility
 
 Not applicable: build tooling only.
+
+## Executive Summary
+
+`make lint` works again on Go 1.27 hosts and in CI by adopting the lint block shared with the other Go projects (golangci-lint v2.12.2, checksum-verified install, run under Go 1.26.0). Dependencies were updated and seven new gosec findings in existing code were triaged as false positives with documented suppressions. The pre-commit spec check's octal parsing bug is fixed. Review first: the Makefile lint block and the Findings Triage table.
 
 ## Alternatives Considered
 
