@@ -2,139 +2,254 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+
+# Nothing by default; each job says what it needs (spec 028).
+permissions: {}
+
+env:
+  GO_VERSION: "1.27.x"
+  NODE_VERSION: "24"
 
 jobs:
-  build-arch:
-    name: Build Arch Package
+  gates:
+    name: Gates
     runs-on: ubuntu-latest
-    container: archlinux:latest
     permissions:
-      contents: write
-
+      contents: read
     steps:
-    - name: Install Build Dependencies
-      run: |
-        pacman -Sy --noconfirm archlinux-keyring
-        pacman -Su --noconfirm
-        pacman -S --noconfirm base-devel git go npm nodejs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/ui/package-lock.json
 
-        # Create non-root builder user (makepkg refuses to run as root)
-        useradd -m builder
-        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+      # VERSION is the version of record. A tag that disagrees with it is a
+      # release nobody can reason about afterwards, so it fails here.
+      - name: The tag matches VERSION
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "v$(tr -d '[:space:]' < VERSION)" = "$TAG" \
+            || { echo "tag $TAG does not match VERSION $(cat VERSION)"; exit 1; }
 
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      with:
-        path: src_repo
-        fetch-depth: 0
+      - name: No binaries in the repository
+        run: make check-no-binaries
+      - name: Build the dashboard UI
+        run: make build-ui
+      - name: Test
+        run: make test
+      - name: Lint
+        run: make lint
+      - name: Vulnerabilities
+        run: make vulncheck
 
-    - name: Fix Permissions
-      run: |
-        chown -R builder:builder src_repo
+  package:
+    name: Build the release package
+    needs: [gates]
+    runs-on: ubuntu-latest
+    container: archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm
+          pacman -S --noconfirm --needed base-devel git go npm nodejs libarchive
+          useradd -m builder
 
-    - name: CI Gates (test + lint)
-      run: |
-        cd src_repo
-        su builder -c "git config --global --add safe.directory $(pwd)"
-        su builder -c "make build-ui"
-        su builder -c "make test"
-        su builder -c "make lint"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src_repo
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Build Package
-      run: |
-        cd src_repo
-        su builder -c "makepkg -s --noconfirm"
+      # From the tagged commit, not from GitHub's main (PKGBUILD's source).
+      - name: Build the package from the tag
+        run: |
+          chown -R builder:builder src_repo
+          cd src_repo
+          su builder -c "git config --global --add safe.directory '*' && scripts/makepkg-local.sh"
 
-    - name: Upload Arch Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: arch-package
-        path: src_repo/*.pkg.tar.zst
+      # A build off the tag, or from a modified tree, says `-dev` (Makefile,
+      # BUILD_VERSION). A release that said so could not be told from a
+      # desk build, so it fails here.
+      - name: The release says its own version
+        run: |
+          cd src_repo
+          v="$(tr -d '[:space:]' < VERSION)"
+          pkg=$(ls fpsd-git-[0-9]*.pkg.tar.zst)
+          bsdtar -xOf "$pkg" usr/bin/fpsd > /tmp/fpsd
+          chmod +x /tmp/fpsd
+          /tmp/fpsd version
+          /tmp/fpsd version | grep -E "^fpsd ${v//./\\.} \(commit: "
+
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arch-package
+          path: src_repo/*.pkg.tar.zst
+          if-no-files-found: error
 
   release:
-    name: Create Release
-    needs: [build-arch]
+    name: Publish the release
+    needs: [package]
     runs-on: ubuntu-latest
+    # Writes the release; id-token and attestations sign what it publishes.
     permissions:
       contents: write
-
+      id-token: write
+      attestations: write
     steps:
-    - name: Download Arch Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: arch-package
-        path: dist
+      # For README.md and main's history. Read as data; nothing in it runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A release is a commit on main. This catches a tag pushed from the
+      # wrong place. A tag with a suffix is a pre-release, which may be tried
+      # from a branch.
+      - name: A release is a commit on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in
+            *-*) echo "pre-release $TAG: not required to be on main" ;;
+            *) git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main \
+                 || { echo "$TAG names a commit that is not on main"; exit 1; } ;;
+          esac
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact-id }}
+          merge-multiple: true
+          path: dist
+
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          sha256sum ./*.pkg.tar.zst | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+
+      # The notes are this version's README changelog entry. The job fails
+      # when the entry is missing: the check that the changelog was written
+      # before the tag was pushed. GitHub's generated notes go underneath.
+      - name: Take the release notes from the changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v t="$TAG" '
+            index($0, "### " t " ") == 1 || $0 == "### " t { f = 1; next }
+            f && /^### / { exit }
+            f { print }
+          ' README.md > NOTES.md
+          grep -q '[^[:space:]]' NOTES.md || { echo "no changelog entry for $TAG in README.md"; exit 1; }
+          cat NOTES.md
+
+      # Build provenance for every published file, checked with
+      # `gh attestation verify <file> -R ushineko/face-puncher-supreme`.
+      # Before the release, so a failure here publishes nothing.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.pkg.tar.zst
+            dist/SHA256SUMS
+
+      # gh creates a draft, uploads to it and publishes it, so this works with
+      # immutable releases on and refuses a release that already exists.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in
+            *-*) kind="--prerelease --latest=false" ;;
+            *) kind="--latest" ;;
+          esac
+          # shellcheck disable=SC2086 # $kind is one or two flags
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TAG" --notes-file NOTES.md --generate-notes $kind \
+            dist/*.pkg.tar.zst dist/SHA256SUMS
+
+  # After the GitHub release, and only for a release: a pre-release is not
+  # what AUR users should build.
   publish-aur:
     name: Publish to AUR
-    needs: [build-arch]
+    needs: [release]
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-    - name: Configure SSH for AUR
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.AUR_SSH_KEY }}" > ~/.ssh/aur_deploy
-        chmod 600 ~/.ssh/aur_deploy
-        printf '%s\n' "Host aur.archlinux.org" "  IdentityFile ~/.ssh/aur_deploy" "  User aur" "  StrictHostKeyChecking accept-new" >> ~/.ssh/config
-        chmod 600 ~/.ssh/config
+      - name: Configure SSH for AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur_deploy
+          chmod 600 ~/.ssh/aur_deploy
+          printf '%s\n' "Host aur.archlinux.org" "  IdentityFile ~/.ssh/aur_deploy" "  User aur" "  StrictHostKeyChecking accept-new" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
-    - name: Clone AUR Repo
-      run: git clone ssh://aur@aur.archlinux.org/fpsd-git.git aur-pkg
+      - name: Clone AUR Repo
+        run: git clone ssh://aur@aur.archlinux.org/fpsd-git.git aur-pkg
 
-    - name: Update AUR Package
-      run: |
-        cp PKGBUILD fpsd.install aur-pkg/
-        cd aur-pkg
+      - name: Update AUR Package
+        run: |
+          cp PKGBUILD fpsd.install aur-pkg/
+          cd aur-pkg
 
-        # Generate .SRCINFO with tabs (AUR requires tab-indented fields)
-        PKGVER=$(grep -oP '(?<=^pkgver=).*' PKGBUILD)
-        PKGREL=$(grep -oP '(?<=^pkgrel=).*' PKGBUILD)
-        T=$(printf '\t')
-        {
-          echo "pkgbase = fpsd-git"
-          echo "${T}pkgdesc = Content-aware HTTPS interception proxy for ad blocking"
-          echo "${T}pkgver = ${PKGVER}"
-          echo "${T}pkgrel = ${PKGREL}"
-          echo "${T}url = https://github.com/ushineko/face-puncher-supreme"
-          echo "${T}install = fpsd.install"
-          echo "${T}arch = x86_64"
-          echo "${T}license = MIT"
-          echo "${T}makedepends = git"
-          echo "${T}makedepends = go"
-          echo "${T}makedepends = npm"
-          echo "${T}makedepends = nodejs"
-          echo "${T}depends = glibc"
-          echo "${T}provides = fpsd"
-          echo "${T}conflicts = fpsd"
-          echo "${T}source = face-puncher-supreme::git+https://github.com/ushineko/face-puncher-supreme.git"
-          echo "${T}sha256sums = SKIP"
-          echo ""
-          echo "pkgname = fpsd-git"
-        } > .SRCINFO
+          # Generate .SRCINFO with tabs (AUR requires tab-indented fields)
+          PKGVER=$(grep -oP '(?<=^pkgver=).*' PKGBUILD)
+          PKGREL=$(grep -oP '(?<=^pkgrel=).*' PKGBUILD)
+          T=$(printf '\t')
+          {
+            echo "pkgbase = fpsd-git"
+            echo "${T}pkgdesc = Content-aware HTTPS interception proxy for ad blocking"
+            echo "${T}pkgver = ${PKGVER}"
+            echo "${T}pkgrel = ${PKGREL}"
+            echo "${T}url = https://github.com/ushineko/face-puncher-supreme"
+            echo "${T}install = fpsd.install"
+            echo "${T}arch = x86_64"
+            echo "${T}license = MIT"
+            echo "${T}makedepends = git"
+            echo "${T}makedepends = go"
+            echo "${T}makedepends = npm"
+            echo "${T}makedepends = nodejs"
+            echo "${T}depends = glibc"
+            echo "${T}provides = fpsd"
+            echo "${T}conflicts = fpsd"
+            echo "${T}source = face-puncher-supreme::git+https://github.com/ushineko/face-puncher-supreme.git"
+            echo "${T}sha256sums = SKIP"
+            echo ""
+            echo "pkgname = fpsd-git"
+          } > .SRCINFO
 
-    - name: Commit and Push to AUR
-      run: |
-        cd aur-pkg
-        git config user.name "ushineko"
-        git config user.email "ushineko@users.noreply.github.com"
-        git add PKGBUILD fpsd.install .SRCINFO
-        if git diff --cached --quiet; then
-          echo "No changes to publish"
-        else
-          VERSION=$(grep -oP '(?<=^pkgver=).*' PKGBUILD)
-          git commit -m "Update to ${VERSION}"
-          git push
-        fi
+      - name: Commit and Push to AUR
+        run: |
+          cd aur-pkg
+          git config user.name "ushineko"
+          git config user.email "ushineko@users.noreply.github.com"
+          git add PKGBUILD fpsd.install .SRCINFO
+          if git diff --cached --quiet; then
+            echo "No changes to publish"
+          else
+            VERSION=$(grep -oP '(?<=^pkgver=).*' PKGBUILD)
+            git commit -m "Update to ${VERSION}"
+            git push
+          fi

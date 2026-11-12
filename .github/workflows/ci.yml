@@ -2,47 +2,91 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
+# Nothing by default; each job says what it needs (spec 028). Actions are
+# pinned by commit, not by tag, which whoever controls an Action's repository
+# can move; Dependabot keeps the pins current, and
+# tests/structure/actions_pinned_test.go fails a workflow that names one by tag.
+permissions: {}
+
+# The Go every job builds with: the newest patch release of this line, looked
+# up on each run. go.mod's `go` line is the minimum the code needs. The
+# linter runs under its own pinned toolchain (Makefile LINT_GO_TOOLCHAIN).
+env:
+  GO_VERSION: "1.27.x"
+  NODE_VERSION: "24"
+
 jobs:
-  build:
-    name: Build & Test
+  test:
+    name: Test and lint
     runs-on: ubuntu-latest
-    container: archlinux:latest
-
+    permissions:
+      contents: read
     steps:
-    - name: Install Build Dependencies
-      run: |
-        pacman -Sy --noconfirm archlinux-keyring
-        pacman -Su --noconfirm
-        pacman -S --noconfirm base-devel git go npm nodejs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/ui/package-lock.json
 
-        # Create non-root builder user (makepkg refuses to run as root)
-        useradd -m builder
-        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+      - name: No binaries in the repository
+        run: make check-no-binaries
 
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      with:
-        path: src_repo
-        fetch-depth: 0
+      # go:embed needs web/ui/dist before anything compiles.
+      - name: Build the dashboard UI
+        run: make build-ui
 
-    - name: Fix Permissions
-      run: |
-        chown -R builder:builder src_repo
+      - name: Test
+        run: make test
 
-    - name: CI Gates (test + lint)
-      run: |
-        cd src_repo
-        su builder -c "git config --global --add safe.directory $(pwd)"
-        su builder -c "make build-ui"
-        su builder -c "make test"
-        su builder -c "make lint"
+      - name: Lint
+        run: make lint
 
-    - name: Build Package
-      run: |
-        cd src_repo
-        su builder -c "makepkg -s --noconfirm"
+      - name: Vulnerabilities
+        run: make vulncheck
+
+      - name: Build
+        run: |
+          make build-go
+          ./fpsd version
+
+  # The PKGBUILD still has to build: makepkg in Arch, from this commit.
+  package:
+    name: Arch package
+    runs-on: ubuntu-latest
+    # Pinned by digest; the job updates its packages with pacman -Syu. The
+    # digest is bumped by hand (Dependabot does not track `container:`).
+    container: archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
+    permissions:
+      contents: read
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm
+          pacman -S --noconfirm --needed base-devel git go npm nodejs
+          useradd -m builder
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src_repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build the package from this commit
+        run: |
+          chown -R builder:builder src_repo
+          cd src_repo
+          su builder -c "git config --global --add safe.directory '*' && scripts/makepkg-local.sh"
+          ls -l ./*.pkg.tar.zst

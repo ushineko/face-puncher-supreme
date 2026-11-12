@@ -1,6 +1,6 @@
 # Spec 025: GitHub Actions Node 24 Upgrade
 
-**Status**: DRAFT
+**Status**: SUPERSEDED by spec 028
 **Created**: 2026-05-31
 **Depends on**: Spec 012 (GitHub Actions / Arch packaging), Spec 014 (AUR publish automation)
 
