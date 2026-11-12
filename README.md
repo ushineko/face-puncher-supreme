@@ -678,6 +678,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
 
+### v1.5.4-rc.1 — 2026-11-12
+
+- pre-release to exercise the spec 028 release workflow (tag/VERSION check, package from the tag, SHA256SUMS, provenance attestation, pre-release publishing, AUR skipped); not published to the AUR
+
 ### v1.5.3 — 2026-11-12
 
 - fix: MITM upstream connections send a Safari-shaped TLS ClientHello (uTLS) instead of Go's `crypto/tls` hello. Reddit's edge had started answering logged-in iOS app requests re-originated by the proxy with a 403 "blocked by network security" page; header handling and the public IP were ruled out by live A/B tests. New config key `mitm.upstream_tls` (`safari` default, `go` for the previous behavior)
