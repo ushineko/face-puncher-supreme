@@ -33,6 +33,7 @@ Runs as a single Go binary with an embedded React dashboard. Supports both expli
 - [Logging](#logging)
 - [Install / Uninstall](#install--uninstall)
 - [Arch Linux Package](#arch-linux-package)
+- [Releases](#releases)
 - [Test](#test)
 - [Lint](#lint)
 - [Project Structure](#project-structure)
@@ -611,6 +612,20 @@ sudo fps-ctl install --transparent --interface eth0
 | `~/.local/share/fpsd/` | User data (databases, CA certs, logs) |
 
 `fps-ctl` detects the package-managed binary and skips binary/service management, only handling iptables rules for transparent proxying.
+
+## Releases
+
+The `VERSION` file is the version of record. `make build` stamps it into the binary only when HEAD is exactly the `v<VERSION>` tag with a clean tree; any other build reports `<VERSION>-<commit>-dev`. `PKGBUILD`'s static `pkgver=` is `VERSION` with `-` replaced by `_` (pacman forbids `-`); a test fails when they disagree.
+
+To release: bump `VERSION` and `PKGBUILD` `pkgver=`, add a `### v<VERSION> — <date>` changelog entry, commit to `main`, then push the tag `v<VERSION>`. The Release workflow:
+
+1. checks the tag matches `VERSION` and, for a release, names a commit on `main`;
+2. runs the test, lint and vulnerability gates;
+3. builds the Arch package with `makepkg` from the tagged commit and checks the binary reports the plain version;
+4. publishes the package, `SHA256SUMS` and build provenance attestations, with the changelog entry as release notes;
+5. updates the AUR package.
+
+A tag with a suffix (`v1.5.4-rc.1`) is a pre-release: it may be pushed from a branch, is never marked latest, and is not published to the AUR. Verify a download with `sha256sum -c SHA256SUMS` and `gh attestation verify <file> -R ushineko/face-puncher-supreme`. Reporting vulnerabilities: [SECURITY.md](SECURITY.md).
 
 ## Test
 

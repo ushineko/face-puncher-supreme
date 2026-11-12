@@ -1,11 +1,20 @@
-.PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint install uninstall
+.PHONY: build build-ui build-go copy-readme test lint coverage clean setup install-lint install uninstall check-no-binaries vulncheck
 
 BINARY := fpsd
-VERSION := 1.5.3
+# VERSION (the file) is the version of record. A build is the release only
+# when HEAD is exactly the v$(VERSION) tag with nothing modified; anything else
+# reports $(VERSION)-<commit>-dev, so a working-tree build cannot be mistaken
+# for the release. The release workflow checks that what it ships says the
+# plain version.
+VERSION := $(shell tr -d '[:space:]' < VERSION)
 COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+SHORT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
+DIRTY := $(shell git status --porcelain 2>/dev/null | head -1)
+ATTAG := $(shell git describe --exact-match --tags --match 'v$(VERSION)' HEAD 2>/dev/null)
+BUILD_VERSION := $(if $(and $(ATTAG),$(if $(DIRTY),,x)),$(VERSION),$(VERSION)$(if $(SHORT_COMMIT),-$(SHORT_COMMIT))-dev)
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/ushineko/face-puncher-supreme/internal/version
-LDFLAGS := -ldflags "-X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)"
+LDFLAGS := -ldflags "-X $(VERSION_PKG).Version=$(BUILD_VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)"
 
 BINDIR := $(shell go env GOPATH)
 LINT_NAME ?= golangci-lint
@@ -73,6 +82,24 @@ lint: export GOLANGCI_LINT_CACHE = $(CURDIR)/.cache/golangci-lint
 lint: install-lint
 	@go version
 	$(BINDIR)/bin/$(LINT_PROGRAM) run --timeout 5m0s --config config/.golangci-$(LINT_VERSION).yml ./...
+
+# Compiled output is build output; .gitignore covers it, but an ignore file
+# only governs untracked files. This fails if one is tracked.
+check-no-binaries:
+	@command -v file >/dev/null || { echo "check-no-binaries needs file(1)" >&2; exit 1; }; \
+	found=$$( { git ls-files -z | xargs -0 -r file --mime-type -- 2>/dev/null \
+	    | grep -E 'application/(x-(executable|sharedlib|pie-executable|archive|object|dosexec|coff|mach-binary|xz|bzip2)|gzip|zip|zstd|vnd\.microsoft\.portable-executable)' \
+	    | cut -d: -f1; git ls-files '*.o' '*.a' '*.so' '*.pkg.tar.zst'; } | sort -u); \
+	if [ -n "$$found" ]; then \
+	    echo "Compiled binaries are tracked in this repository:" >&2; \
+	    echo "$$found" | sed 's/^/  /' >&2; \
+	    echo "Remove them with: git rm --cached <file>" >&2; \
+	    exit 1; \
+	fi; \
+	echo "No compiled binaries are tracked."
+
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 coverage:
 	go test -race -coverprofile=coverage.out ./...

@@ -1,0 +1,41 @@
+# Keeps the pinned Actions, the Go modules and the dashboard's npm packages
+# current (spec 028). Weekly and grouped, so a week's updates are one pull
+# request per ecosystem. A version is a week old before it is proposed: a bad
+# release is usually found and pulled by then. Security updates do not wait.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      modules:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directory: /web/ui
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      ui:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ui)"

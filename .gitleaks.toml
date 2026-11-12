@@ -1,0 +1,5 @@
+# gitleaks' rules (spec 028), with room for an allow-list of values this
+# repository's tests and docs carry on purpose. Allow by pattern and path,
+# never by turning a rule off.
+[extend]
+useDefault = true

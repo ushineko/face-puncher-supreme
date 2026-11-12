@@ -16,8 +16,9 @@ install=fpsd.install
 
 pkgver() {
 	cd face-puncher-supreme
-	# Read VERSION from Makefile (single source of truth)
-	_ver=$(grep -oP '(?<=^VERSION := ).*' Makefile | tr -d '[:space:]')
+	# VERSION is the version of record; pacman forbids '-' in pkgver.
+	_ver=$(tr -d '[:space:]' < VERSION)
+	_ver=${_ver//-/_}
 	printf "%s.r%s.g%s" "$_ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
