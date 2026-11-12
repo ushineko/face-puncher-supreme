@@ -1,6 +1,6 @@
 # Spec 028: CI, Release and Supply-Chain Standardization
 
-**Status**: INCOMPLETE
+**Status**: COMPLETE
 **Created**: 2026-11-12
 **Depends on**: Spec 012 (GitHub Actions / Arch packaging), Spec 014 (AUR publish), Spec 027 (lint toolchain)
 **Supersedes**: Spec 025 (GitHub Actions Node 24 upgrade)
@@ -64,17 +64,17 @@ Enable: required SHA pinning for Actions, Dependabot security updates, immutable
 
 ## Acceptance Criteria
 
-- [ ] All workflow `uses:` and container references are SHA/digest-pinned; `TestEveryActionIsPinned` passes and `TestAnUnpinnedActionIsFound` shows tag references are caught.
-- [ ] Every workflow has `permissions: {}` at the top and per-job grants.
-- [ ] CI runs on a pull request: test, lint, build, check-no-binaries, vulncheck, structure tests, Arch package build all green.
-- [ ] Security workflow runs gitleaks green on the pull request; Scorecard runs green on main after merge.
-- [ ] `dependabot.yml` is accepted by GitHub (no configuration error on the repository's Dependabot page) after merge.
-- [ ] `VERSION` exists; `make build` from a clean tagged commit reports the plain version, from a modified tree reports `-dev`; `TestPKGBUILDVersionMatchesVERSION` passes and fails when they differ.
-- [ ] A pre-release tag run (`v1.5.4-rc.1`) passes the release workflow: tag/VERSION check, package from the tagged commit, version self-check, notes, SHA256SUMS, attestations, published as pre-release; AUR publish skipped.
-- [ ] `gh attestation verify` succeeds for a file from that pre-release.
-- [ ] Repository settings in R6 are enabled.
-- [ ] Spec 025 marked SUPERSEDED by this spec.
-- [ ] `make test`, `make lint`, `go vet ./...` pass.
+- [x] All workflow `uses:` and container references are SHA/digest-pinned; `TestEveryActionIsPinned` passes and `TestAnUnpinnedActionIsFound` shows tag references are caught.
+- [x] Every workflow has `permissions: {}` at the top and per-job grants.
+- [x] CI runs on a pull request: test, lint, build, check-no-binaries, vulncheck, structure tests, Arch package build all green.
+- [x] Security workflow runs gitleaks green on the pull request; Scorecard runs green on main after merge.
+- [x] `dependabot.yml` is accepted by GitHub (no configuration error on the repository's Dependabot page) after merge.
+- [x] `VERSION` exists; `make build` from a clean tagged commit reports the plain version, from a modified tree reports `-dev`; `TestPKGBUILDVersionMatchesVERSION` passes and fails when they differ.
+- [x] A pre-release tag run (`v1.5.4-rc.1`) passes the release workflow: tag/VERSION check, package from the tagged commit, version self-check, notes, SHA256SUMS, attestations, published as pre-release; AUR publish skipped.
+- [x] `gh attestation verify` succeeds for a file from that pre-release.
+- [x] Repository settings in R6 are enabled.
+- [x] Spec 025 marked SUPERSEDED by this spec.
+- [x] `make test`, `make lint`, `go vet ./...` pass.
 
 ## Test Strategy
 
@@ -90,6 +90,17 @@ Enable: required SHA pinning for Actions, Dependabot security updates, immutable
 | 3 | GitHub, tag `v1.5.4-rc.1` on a side branch `rc/v1.5.4-rc.1` (one commit on top of the merged main: `VERSION`, `PKGBUILD` and a changelog heading for the rc) | Push branch and tag | Release workflow green; pre-release with package, SHA256SUMS, notes; AUR job skipped | 7 |
 | 4 | Local | `gh attestation verify <pkg> -R ushineko/face-puncher-supreme` | Verification succeeds | 8 |
 
+### E2E results (2026-11-12)
+
+| Step | Result |
+|---|---|
+| 1 | PR #33: Test and lint (Go 1.27.4; lint under go1.26.0, 0 issues; structure tests; vulncheck; check-no-binaries; build reported `1.5.3-2909c24-dev`), Arch package (makepkg from the PR commit), gitleaks: all pass. PASS |
+| 2 | Main `add6a20`: CI, Security (gitleaks + Scorecard), Spec Tracking pass; Dependabot ran all three ecosystems without configuration errors and opened PRs #35 (actions) and #36 (ui). PASS |
+| 3 | Tag `v1.5.4-rc.1` (`e3cf16f`, side branch): Gates, package, publish pass, AUR skipped. Release is a pre-release, immutable, not latest (latest stays v1.5.3); notes are the changelog entry; assets are the package, debug package and SHA256SUMS; the packaged binary reports `fpsd 1.5.4-rc.1`. PASS |
+| 4 | `sha256sum -c SHA256SUMS` OK; `gh attestation verify` exits 0 for the package and SHA256SUMS, signer `release.yml@refs/tags/v1.5.4-rc.1`; a tampered SHA256SUMS fails (exit 1). PASS |
+
+Repository settings (R6) verified via the API: `sha_pinning_required` true, vulnerability alerts and Dependabot security updates enabled, immutable releases enabled, private vulnerability reporting enabled.
+
 ### Prod visibility
 
 Not applicable: CI and release tooling. Observation is through the Actions run history and the Releases page.
@@ -102,6 +113,10 @@ Not applicable: CI and release tooling. Observation is through the Actions run h
 - **SHA pinning enforcement** fails any workflow that names an Action by tag, including the spec-tracking workflow; all are converted in the same change.
 - **Scorecard** publishes results publicly (the repository is public).
 - **AUR package source**: `fpsd-git` still builds from GitHub's default branch for AUR users; only the release job's package is built from the tag.
+
+## Executive Summary
+
+fpsd's CI and releases now follow the workspace's shared conventions: SHA-pinned least-privilege workflows enforced by a test, gitleaks, Scorecard and Dependabot, a `VERSION` file with `-dev` builds, and releases built from the tag with checksums, provenance attestations and pre-release support. Verified end to end with PR #33, main, and the `v1.5.4-rc.1` pre-release. Review first: `release.yml` and `scripts/makepkg-local.sh`.
 
 ## Alternatives Considered
 
