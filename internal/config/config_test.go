@@ -350,3 +350,40 @@ func TestDump(t *testing.T) {
 	assert.Equal(t, cfg.BlocklistURLs, parsed.BlocklistURLs)
 	assert.Equal(t, cfg.Timeouts.Shutdown.Duration, parsed.Timeouts.Shutdown.Duration)
 }
+
+func TestMITMUpstreamTLS_DefaultIsSafari(t *testing.T) {
+	assert.Equal(t, "safari", Default().MITM.UpstreamTLS)
+}
+
+func TestMITMUpstreamTLS_Validation(t *testing.T) {
+	tests := []struct {
+		value   string
+		wantErr bool
+	}{
+		{"safari", false},
+		{"go", false},
+		{"", false},
+		{"chrome", true},
+		{"Safari", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			errs := validateMITM(MITM{UpstreamTLS: tt.value})
+			if tt.wantErr {
+				assert.NotEmpty(t, errs)
+			} else {
+				assert.Empty(t, errs)
+			}
+		})
+	}
+}
+
+func TestLoad_UpstreamTLSOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fpsd.yml")
+	require.NoError(t, os.WriteFile(path, []byte("mitm:\n  upstream_tls: \"go\"\n"), 0o600))
+
+	cfg, _, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "go", cfg.MITM.UpstreamTLS)
+}

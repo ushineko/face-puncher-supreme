@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net"
@@ -22,6 +23,10 @@ type Interceptor struct {
 	logger         *slog.Logger
 	verbose        bool
 	connectTimeout time.Duration
+	upstreamTLS    string // ClientHello fingerprint, see UpstreamTLS* constants
+	// upstreamRootCAs overrides the system roots for upstream verification
+	// (tests only; nil in production).
+	upstreamRootCAs *x509.CertPool
 
 	// OnMITMRequest is called for each HTTP request-response cycle through
 	// a MITM session. Parameters: clientIP, domain.
@@ -50,10 +55,18 @@ type InterceptorConfig struct {
 	Verbose        bool
 	ConnectTimeout time.Duration
 	OnMITMRequest  func(clientIP, domain string)
+	// UpstreamTLS selects the upstream ClientHello fingerprint
+	// (UpstreamTLSSafari or UpstreamTLSGo). Empty means UpstreamTLSSafari.
+	UpstreamTLS string
 }
 
 // NewInterceptor creates a MITM interceptor for the given domains.
 func NewInterceptor(cfg *InterceptorConfig) *Interceptor {
+	upstreamTLS := cfg.UpstreamTLS
+	if upstreamTLS == "" {
+		upstreamTLS = UpstreamTLSSafari
+	}
+
 	domains := make(map[string]struct{}, len(cfg.Domains))
 	for _, d := range cfg.Domains {
 		domains[strings.ToLower(d)] = struct{}{}
@@ -65,6 +78,7 @@ func NewInterceptor(cfg *InterceptorConfig) *Interceptor {
 		logger:         cfg.Logger,
 		verbose:        cfg.Verbose,
 		connectTimeout: cfg.ConnectTimeout,
+		upstreamTLS:    upstreamTLS,
 		OnMITMRequest:  cfg.OnMITMRequest,
 	}
 }
@@ -73,6 +87,11 @@ func NewInterceptor(cfg *InterceptorConfig) *Interceptor {
 func (i *Interceptor) IsMITMDomain(domain string) bool {
 	_, ok := i.domains[strings.ToLower(domain)]
 	return ok
+}
+
+// UpstreamTLS returns the upstream ClientHello fingerprint in use.
+func (i *Interceptor) UpstreamTLS() string {
+	return i.upstreamTLS
 }
 
 // Domains returns the number of configured MITM domains.
@@ -139,18 +158,23 @@ func (i *Interceptor) Handle(clientConn net.Conn, domain, host, clientIP string)
 	defer func() { _ = upstreamConn.Close() }()
 
 	// TLS handshake with the upstream server (proxy acts as a client).
-	upstreamTLSConfig := &tls.Config{
-		ServerName: domain,
-		NextProtos: []string{"http/1.1"},
-		MinVersion: tls.VersionTLS12,
+	upstreamTLS, tlsErr := newUpstreamTLS(upstreamConn, domain, i.upstreamTLS, i.upstreamRootCAs)
+	if tlsErr != nil {
+		i.logger.Error("mitm upstream TLS setup failed",
+			"domain", domain,
+			"client", clientIP,
+			"upstream_tls", i.upstreamTLS,
+			"error", tlsErr,
+		)
+		return
 	}
-	upstreamTLS := tls.Client(upstreamConn, upstreamTLSConfig)
 	upHSCtx, upHSCancel := timeoutCtx(5 * time.Second)
 	defer upHSCancel()
 	if err := upstreamTLS.HandshakeContext(upHSCtx); err != nil {
 		i.logger.Error("mitm upstream TLS handshake failed",
 			"domain", domain,
 			"client", clientIP,
+			"upstream_tls", i.upstreamTLS,
 			"error", err,
 		)
 		return
@@ -172,7 +196,7 @@ func (i *Interceptor) Handle(clientConn net.Conn, domain, host, clientIP string)
 // proxyLoop reads HTTP requests from the client and forwards them to the
 // upstream server, then reads responses and forwards them back. Returns
 // the number of request-response cycles completed.
-func (i *Interceptor) proxyLoop(clientTLS, upstreamTLS *tls.Conn, domain, clientIP string) int {
+func (i *Interceptor) proxyLoop(clientTLS *tls.Conn, upstreamTLS net.Conn, domain, clientIP string) int {
 	clientReader := bufio.NewReader(clientTLS)
 	upstreamReader := bufio.NewReader(upstreamTLS)
 	requests := 0

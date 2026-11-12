@@ -53,6 +53,9 @@ type MITM struct {
 	CACert  string   `yaml:"ca_cert"`
 	CAKey   string   `yaml:"ca_key"`
 	Domains []string `yaml:"domains"`
+	// UpstreamTLS selects the TLS ClientHello fingerprint used for upstream
+	// connections: "safari" (default) or "go". Empty means "safari".
+	UpstreamTLS string `yaml:"upstream_tls"`
 }
 
 // Transparent holds transparent proxy listener configuration.
@@ -94,8 +97,9 @@ func Default() Config {
 		Verbose: false,
 		DataDir: ".",
 		MITM: MITM{
-			CACert: "ca-cert.pem",
-			CAKey:  "ca-key.pem",
+			CACert:      "ca-cert.pem",
+			CAKey:       "ca-key.pem",
+			UpstreamTLS: "safari",
 		},
 		Transparent: Transparent{
 			Enabled:   false,
@@ -294,6 +298,11 @@ func validateMITM(m MITM) []string {
 		if d == "" || strings.Contains(d, "*") || strings.Contains(d, "/") || strings.Contains(d, " ") {
 			errs = append(errs, fmt.Sprintf("mitm.domains[%d]: invalid domain %q", i, d))
 		}
+	}
+	switch m.UpstreamTLS {
+	case "", "safari", "go":
+	default:
+		errs = append(errs, fmt.Sprintf("mitm.upstream_tls: invalid value %q (want \"safari\" or \"go\")", m.UpstreamTLS))
 	}
 	return errs
 }

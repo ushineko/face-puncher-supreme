@@ -315,6 +315,15 @@ Only explicitly listed domains are intercepted. All other HTTPS traffic remains 
 
 MITM is HTTP/1.1 only. The proxy generates short-lived leaf certificates (24h) per domain, signed by the CA, cached in memory.
 
+**Upstream TLS fingerprint**: the proxy re-originates each intercepted connection, so the origin sees the proxy's TLS ClientHello, not the client's. Some origins reject Go's `crypto/tls` hello: Reddit answers logged-in iOS app requests from it with a 403 "blocked by network security" page. By default the proxy sends a Safari-shaped hello (uTLS preset, ALPN `http/1.1`). Certificate verification against the system roots is unchanged.
+
+```yaml
+mitm:
+  upstream_tls: "safari"   # "safari" (default) or "go" (Go crypto/tls, the pre-1.5.3 behavior)
+```
+
+The active value is logged at startup (`mitm enabled ... upstream_tls=safari`) and on upstream handshake failures. Set `go` to roll back.
+
 **Subcommands**:
 
 - `fpsd generate-ca` — Create CA cert and key (refuses to overwrite; use `--force` to regenerate)
@@ -653,6 +662,13 @@ MIT License — (c)2026 ushineko — [github.com/ushineko/face-puncher-supreme](
 See [LICENSE](LICENSE) for the full text.
 
 ## Changelog
+
+### v1.5.3 — 2026-11-12
+
+- fix: MITM upstream connections send a Safari-shaped TLS ClientHello (uTLS) instead of Go's `crypto/tls` hello. Reddit's edge had started answering logged-in iOS app requests re-originated by the proxy with a 403 "blocked by network security" page; header handling and the public IP were ruled out by live A/B tests. New config key `mitm.upstream_tls` (`safari` default, `go` for the previous behavior)
+- build: lint toolchain aligned with the other Go projects — golangci-lint v2.12.2 installed from the release tarball with a pinned checksum, run under Go 1.26.0 (`LINT_GO_TOOLCHAIN`) so `make lint` works on Go 1.27 hosts and CI; config moved to `config/.golangci-v2.12.2.yml`
+- build: dependency updates (modernc.org/sqlite, golang.org/x/sys, testify and others); `go.mod` minimum is Go 1.26.0
+- fix: pre-commit spec check no longer reads zero-padded spec numbers as octal
 
 ### v1.5.2 — 2026-05-30
 

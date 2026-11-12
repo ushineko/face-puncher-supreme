@@ -66,6 +66,9 @@ mitm:
     - www.reddit.com
     - old.reddit.com
     - gql-fed.reddit.com
+  # TLS ClientHello fingerprint for upstream connections: "safari" (default)
+  # or "go". Some origins reject Go's crypto/tls hello (Reddit, logged-in app).
+  upstream_tls: "safari"
 
 # Content filter plugins — site-specific filters for MITM'd domains.
 # Each plugin targets a set of domains and operates in "intercept" or "filter" mode.

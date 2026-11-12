@@ -359,6 +359,7 @@ func initMITM(cfg *config.Config, bl *blocklist.DB, logger *slog.Logger, collect
 		Verbose:        cfg.Verbose,
 		ConnectTimeout: cfg.Timeouts.Connect.Duration,
 		OnMITMRequest:  collector.RecordMITMRequest,
+		UpstreamTLS:    cfg.MITM.UpstreamTLS,
 	})
 
 	// CA cert download handler.
@@ -392,6 +393,7 @@ func initMITM(cfg *config.Config, bl *blocklist.DB, logger *slog.Logger, collect
 		"domain_list", cfg.MITM.Domains,
 		"ca_fingerprint", ca.Fingerprint,
 		"ca_expires", ca.NotAfter.Format("2006-01-02"),
+		"upstream_tls", interceptor.UpstreamTLS(),
 	)
 
 	return mitmResult{
